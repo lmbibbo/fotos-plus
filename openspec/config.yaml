@@ -1,0 +1,57 @@
+schema: spec-driven
+
+context: |
+  Proyecto:
+  - Organizador de fotos.
+  - Explora un directorio o carpeta con fotos tomadas con un celular o una cámara digital
+    y las organiza según distintos criterios: fechas, lugares y gente.
+  - Incluye un visualizador ordenado de las fotos ya organizadas.
+  Tech stack:
+  - App: Python
+  - Persistencia: PostgreSQL.
+  - Pruebas: pytest.
+  Git workflow:
+  - Cada cambio se desarrolla en una rama `feature/<nombre-del-cambio>`.
+  - No se permiten commits ni push directos a `main`.
+
+rules:
+  proposal:
+    - Include rollback plan
+  specs:
+    - Use Given/When/Then format for scenarios
+    - Write normative keywords in Spanish, DEBE (MUST) on the first verb of each
+      requirement and NO DEBE for prohibitions, because the OpenSpec validator looks
+      for MUST or SHALL
+  design:
+    - Include sequence diagrams for complex flows
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+# Example:
+#   context: |
+#     Tech stack: TypeScript, React, Node.js
+#     We use conventional commits
+#     Domain: e-commerce platform
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing

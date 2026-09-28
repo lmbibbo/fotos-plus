@@ -214,5 +214,11 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# Fotos-plus
+# Indices locales de escaneo: son datos de la maquina, nunca se versionan
+*.index.json
+.indices/
+fotos-plus-index.json
+
 # Streamlit
 .streamlit/secrets.toml

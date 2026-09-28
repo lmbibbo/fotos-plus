@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fotos-plus"
+version = "0.1.0"
+description = "Organizador de fotos"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+]
+
+[project.scripts]
+fotos-plus = "fotos_plus.cli:main"
+
+[tool.setuptools]
+packages = ["fotos_plus"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
