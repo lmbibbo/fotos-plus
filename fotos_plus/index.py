@@ -23,10 +23,20 @@ def indexes_dir() -> Path:
     return state_dir() / "indexes"
 
 
-def default_index_path(root: Path) -> Path:
+def _index_file_name(root: Path) -> str:
     normalized = os.path.normcase(os.path.normpath(str(Path(root).resolve())))
     key = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
-    return indexes_dir() / f"{key}.json"
+    return f"{key}.json"
+
+
+def index_path_for(root: Path, index_dir: Optional[Path] = None) -> Path:
+    if index_dir is not None:
+        return Path(index_dir) / _index_file_name(root)
+    return indexes_dir() / _index_file_name(root)
+
+
+def default_index_path(root: Path) -> Path:
+    return index_path_for(root)
 
 
 def write_index(result: ScanResult, path: Path) -> Path:

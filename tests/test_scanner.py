@@ -152,3 +152,47 @@ def test_file_instead_of_directory_raises(tmp_path: Path) -> None:
     make_image(archivo)
     with pytest.raises(ScanRootError):
         scan(archivo)
+
+
+def test_progress_callback_receives_total_and_counts_up(tmp_path: Path) -> None:
+    make_image(tmp_path / "una.jpg", color="red")
+    make_image(tmp_path / "sub/dos.jpg", color="green")
+    (tmp_path / "tres.png").write_bytes(b"no soy una imagen")
+    (tmp_path / "notas.txt").write_text("no es foto")
+    seen: list[tuple[int, int]] = []
+
+    result = scan(tmp_path, progress=lambda done, total: seen.append((done, total)))
+
+    assert seen[-1] == (3, 3)
+    assert [done for done, _ in seen] == [1, 2, 3]
+    assert {total for _, total in seen} == {3}
+    assert len(result.photos) + len(result.errors) == 3
+
+
+def test_progress_total_excludes_non_photos(tmp_path: Path) -> None:
+    make_image(tmp_path / "foto.jpg", color="red")
+    for name in ("a.pdf", "b.txt", "c.mp4", "d.mov"):
+        (tmp_path / name).write_bytes(b"x")
+    seen: list[tuple[int, int]] = []
+
+    scan(tmp_path, progress=lambda done, total: seen.append((done, total)))
+
+    assert {total for _, total in seen} == {1}
+
+
+def test_progress_callback_failure_does_not_abort_the_scan(tmp_path: Path) -> None:
+    make_image(tmp_path / "una.jpg", color="red")
+    make_image(tmp_path / "dos.jpg", color="green")
+
+    def boom(done: int, total: int) -> None:
+        raise RuntimeError("el progreso fallo")
+
+    result = scan(tmp_path, progress=boom)
+
+    assert [photo.name for photo in result.photos] == ["dos.jpg", "una.jpg"]
+
+
+def test_scan_without_progress_callback_still_works(tmp_path: Path) -> None:
+    make_image(tmp_path / "una.jpg", color="red")
+
+    assert [photo.name for photo in scan(tmp_path).photos] == ["una.jpg"]

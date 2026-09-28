@@ -3,10 +3,12 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Callable, Iterator, Optional
 
 from .models import Photo, ScanError, ScanResult
 from .photos import PhotoError, identify, is_supported
+
+ProgressCallback = Callable[[int, int], None]
 
 
 class ScanRootError(Exception):
@@ -82,18 +84,35 @@ def _mark_duplicates(photos: list[Photo]) -> None:
             duplicate.duplicate_of = original.relative_path
 
 
-def scan(root: Path) -> ScanResult:
+def _notify(callback: Optional[ProgressCallback], processed: int, total: int) -> None:
+    if callback is None:
+        return
+    try:
+        callback(processed, total)
+    except Exception:
+        return
+
+
+def scan(
+    root: Path, progress: Optional[ProgressCallback] = None
+) -> ScanResult:
     root = Path(root)
     _check_root(root)
 
     errors: list[ScanError] = []
+    counting_errors: list[ScanError] = []
+    total = sum(1 for _ in _iter_candidates(root, counting_errors))
+
     photos: list[Photo] = []
+    processed = 0
     for path in _iter_candidates(root, errors):
         relative = _relative_path(path, root)
         try:
             photos.append(identify(path, relative))
         except PhotoError as error:
             errors.append(ScanError(relative_path=relative, error=str(error)))
+        processed += 1
+        _notify(progress, processed, total)
 
     photos.sort(key=lambda photo: photo.relative_path)
     _mark_duplicates(photos)

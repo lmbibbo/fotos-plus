@@ -5,8 +5,9 @@ import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
-from .index import default_index_path, write_index
+from .index import index_path_for, indexes_dir, write_index
 from .photos import EXTENSION_ONLY_EXTENSIONS, FULLY_READABLE_EXTENSIONS
+from .progress import ProgressReporter, progress_enabled
 from .scanner import ScanRootError, scan
 
 EXIT_OK = 0
@@ -50,7 +51,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--index",
         type=Path,
         default=None,
-        help="Ruta del archivo de indice (por defecto, uno por carpeta escaneada).",
+        help=(
+            "Ruta del archivo de indice. Tiene prioridad sobre --index-dir."
+        ),
+    )
+    scan_parser.add_argument(
+        "--index-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Carpeta donde se guardan los indices, uno por carpeta escaneada "
+            f"(por defecto: {indexes_dir()})."
+        ),
     )
     return parser
 
@@ -78,12 +90,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.command == "scan":
         root = Path(args.path)
+        reporter = (
+            ProgressReporter(sys.stdout) if progress_enabled(sys.stdout) else None
+        )
         try:
-            result = scan(root)
+            result = scan(root, progress=reporter)
         except ScanRootError as error:
             print(str(error), file=sys.stderr)
             return EXIT_PATH_ERROR
-        index_path = args.index or default_index_path(root)
+        if reporter is not None:
+            reporter.finish()
+        index_path = args.index or index_path_for(root, args.index_dir)
         write_index(result, index_path)
         _print_summary(index_path, result, sys.stdout)
         return EXIT_OK

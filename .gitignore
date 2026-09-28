@@ -215,7 +215,10 @@ marimo/_lsp/
 __marimo__/
 
 # Fotos-plus
-# Indices locales de escaneo: son datos de la maquina, nunca se versionan
+# Indices locales de escaneo: son datos de la maquina, nunca se versionan.
+# El nombre real es el hash de la ruta escaneada (16 hexadecimales) mas .json,
+# y el lanzador .bat los deja en la carpeta desde la que se ejecuta.
+/[0-9a-f]*.json
 *.index.json
 .indices/
 fotos-plus-index.json

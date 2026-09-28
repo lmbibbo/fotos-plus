@@ -31,16 +31,49 @@ pip install -e ".[dev]"
 # Escanear una carpeta y escribir el índice
 fotos-plus scan "C:\fotos\vacaciones"
 
-# Escanear guardando el índice en una ruta concreta
+# Guardar todos los índices en una carpeta elegida
+fotos-plus scan "C:\fotos\vacaciones" --index-dir "D:\fotos-plus"
+
+# Escanear guardando el índice en un archivo concreto
 fotos-plus scan "C:\fotos\vacaciones" --index ./escaneo.index.json
 ```
 
 Para ver los formatos admitidos: `fotos-plus scan --help`.
-Si el directorio de scripts de Python no está en el PATH, el comando también corre como
-`python -m fotos_plus scan <carpeta>`.
 
 El escaneo recorre la carpeta y sus subdirectorios, y **no mueve, renombra ni modifica**
 ninguna foto.
+
+### Lanzador para Windows
+
+En la raíz del proyecto hay `fotos-plus.bat`, pensado para no depender de que el
+comando `fotos-plus` esté instalado ni de que el directorio de scripts de Python esté
+en el PATH:
+
+```bat
+REM asume scan: equivale a "fotos-plus scan"
+fotos-plus.bat "C:\fotos\vacaciones"
+
+REM con el subcomando explícito
+fotos-plus.bat scan "C:\fotos\vacaciones"
+
+REM otra carpeta para el índice
+fotos-plus.bat scan "C:\fotos\vacaciones" --index-dir "D:\fotos-plus"
+
+REM un archivo de índice puntual
+fotos-plus.bat scan "C:\fotos\vacaciones" --index indice.json
+
+REM la ayuda general
+fotos-plus.bat
+```
+
+Si el primer argumento no es un subcomando ni `-h`/`--help`, el lanzador antepone `scan`
+automáticamente. Usa `python` si está disponible y, si no, `py -3`. Devuelve el mismo
+código de salida que el comando, así que se puede usar desde scripts.
+
+**El lanzador guarda el índice en la carpeta desde la que lo ejecutás**, no en el
+directorio de estado: el nombre del archivo es el hash de la ruta escaneada, así que
+escanear dos carpetas distintas desde el mismo lugar no se pisa. Si pasás `--index` o
+`--index-dir`, se respeta esa indicación y no se usa la carpeta de invocación.
 
 ## Qué se registra por foto
 
@@ -62,12 +95,57 @@ ruta relativa más corta.
 
 ## Dónde queda el índice
 
-Por defecto, en el directorio de estado del usuario:
+El nombre del archivo es siempre el hash de la ruta escaneada, así que dos carpetas
+distintas nunca comparten índice. Lo que cambia es la carpeta.
+
+Con el comando `fotos-plus`, por defecto va al directorio de estado del usuario:
 
 - Windows: `%LOCALAPPDATA%\fotos-plus\indexes\<hash-de-la-carpeta>.json`
 - Linux y macOS: `~/.local/state/fotos-plus/indexes/<hash-de-la-carpeta>.json`
 
-Con `--index` se elige la ruta a mano. La carpeta de fotos no se modifica en ningún caso.
+> En Windows, si usás la versión de Python de la Microsoft Store, ese directorio queda
+> dentro de la carpeta de la aplicación
+> (`%LOCALAPPDATA%\Packages\PythonSoftwareFoundation.Python…\LocalCache\Local\…`) y no
+> se ve en el explorador. Por eso el lanzador `.bat` usa otro destino por defecto.
+
+Con `--index-dir <carpeta>` se elige dónde se guardan los índices: todos van a esa
+carpeta, un archivo por carpeta de fotos escaneada. La carpeta se crea si no existe.
+Sirve, por ejemplo, para tener los índices en otro disco o en una carpeta sincronizada.
+
+Con `--index <archivo>` se escribe el índice en ese archivo puntual. Si se pasan los dos,
+**gana `--index`** y no se crea nada en `--index-dir`.
+
+`fotos-plus.bat` usa por defecto la carpeta desde la que se lo ejecuta, en lugar del
+directorio de estado. La ruta exacta siempre la imprime el resumen, en la línea
+`Indice:`.
+
+La carpeta de fotos no se modifica en ningún caso.
+
+## Progreso del escaneo
+
+En una terminal, mientras se escanea, se muestra una sola línea que se va
+sobrescribiendo:
+
+```text
+Escaneando... 1200/4927 (24%) - 18.3 fotos/s - faltan 3m 22s
+```
+
+Al terminar queda la línea completa al 100% y después el resumen habitual. `faltan` es
+una estimación de lo que queda, y se muestra como `?` mientras todavía no hay datos
+suficientes. Antes de tener el total, el porcentaje y la velocidad se muestran como `--`.
+
+El progreso **solo** se escribe si la salida es un terminal interactivo. Si se redirige
+a un archivo o a otro proceso:
+
+```bash
+fotos-plus scan "C:\fotos\vacaciones" > escaneo.txt
+```
+
+el archivo solo tendrá el resumen, sin caracteres de control. Se puede desactivar en
+cualquier momento, incluso en una terminal, con la variable de entorno
+`FOTOS_PLUS_NO_PROGRESS=1`.
+
+Una carpeta sin fotos no muestra ninguna línea de progreso.
 
 ## Códigos de salida
 
