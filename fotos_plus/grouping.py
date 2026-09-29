@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import math
+from collections import Counter
 from datetime import date
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 from .models import (
+    COUNTRY_SOURCE_COORDINATES,
+    COUNTRY_SOURCE_UNAVAILABLE,
     LOCATION_KNOWN,
     LOCATION_UNKNOWN,
     PeriodSuggestion,
     Photo,
     SuggestionsResult,
+    TripLocation,
     TripSuggestion,
 )
 
@@ -46,7 +50,38 @@ def _group_bounds(photos: Sequence[Photo]) -> tuple[str, str]:
     return ordered[0], ordered[-1]
 
 
-def _trip_suggestions(positioned: Sequence[Photo]) -> list[TripSuggestion]:
+def _trip_location(counter: Counter) -> TripLocation:
+    """Deriva el pais de un viaje a partir del conteo de paises de sus fotos.
+
+    El pais dominante es el que concentra mas fotos. Un empate no se resuelve: se
+    declara que no hay dominante y la lista muestra los paises empatados.
+    """
+    if not counter:
+        return TripLocation(
+            country=None,
+            countries=[],
+            source=COUNTRY_SOURCE_UNAVAILABLE,
+        )
+    ordered = counter.most_common()
+    names = [name for name, _ in ordered]
+    top_count = ordered[0][1]
+    tied = [name for name, count in ordered if count == top_count]
+    if len(tied) > 1:
+        return TripLocation(
+            country=None,
+            countries=names,
+            source=COUNTRY_SOURCE_COORDINATES,
+        )
+    return TripLocation(
+        country=names[0],
+        countries=names,
+        source=COUNTRY_SOURCE_COORDINATES,
+    )
+
+
+def _trip_suggestions(
+    positioned: Sequence[Photo], classify: Callable[[Photo], Optional[str]]
+) -> list[TripSuggestion]:
     ordered = sorted(positioned, key=lambda photo: (photo.captured_at, photo.relative_path))
     groups: list[list[Photo]] = []
     for photo in ordered:
@@ -62,12 +97,18 @@ def _trip_suggestions(positioned: Sequence[Photo]) -> list[TripSuggestion]:
     suggestions = []
     for group in groups:
         first, last = _group_bounds(group)
+        counter: Counter = Counter()
+        for photo in group:
+            name = classify(photo)
+            if name is not None:
+                counter[name] += 1
         suggestions.append(
             TripSuggestion(
                 photo_count=len(group),
                 first_captured_at=first,
                 last_captured_at=last,
                 location_state=LOCATION_KNOWN,
+                location=_trip_location(counter),
             )
         )
     return suggestions
@@ -114,7 +155,12 @@ def _period_suggestions(
 
 
 def build_suggestions(
-    photos: Sequence[Photo], root: str, scanned_at: str
+    photos: Sequence[Photo],
+    root: str,
+    scanned_at: str,
+    classify: Optional[Callable[[Photo], Optional[str]]] = None,
+    countries_version: Optional[int] = None,
+    countries_notice: Optional[str] = None,
 ) -> SuggestionsResult:
     dated = [photo for photo in photos if photo.captured_at]
     undated = [photo for photo in photos if not photo.captured_at]
@@ -126,7 +172,12 @@ def build_suggestions(
         day for day in (_photo_day(photo) for photo in positioned) if day is not None
     }
 
-    trips = _trip_suggestions(positioned)
+    if classify is None:
+
+        def classify(photo: Photo) -> Optional[str]:
+            return None
+
+    trips = _trip_suggestions(positioned, classify)
     periods, reference_count = _period_suggestions(unpositioned, days_with_position)
 
     return SuggestionsResult(
@@ -136,6 +187,8 @@ def build_suggestions(
         periods=periods,
         reference_locatable_count=reference_count,
         undated_photo_count=len(undated),
+        countries_version=countries_version,
+        countries_notice=countries_notice,
     )
 
 
@@ -146,4 +199,8 @@ def suggestions_counts(result: SuggestionsResult) -> dict:
         "photos_to_audit": result.trips_to_audit_count,
         "reference_locatable": result.reference_locatable_count,
         "undated": result.undated_photo_count,
+        "trips_with_country": result.trips_with_country_count,
+        "trips_without_country": result.trips_without_country_count,
+        "multi_country_trips": result.multi_country_trips_count,
+        "countries_version": result.countries_version,
     }

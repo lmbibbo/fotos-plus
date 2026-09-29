@@ -23,5 +23,8 @@ fotos-plus = "fotos_plus.cli:main"
 [tool.setuptools]
 packages = ["fotos_plus"]
 
+[tool.setuptools.package-data]
+fotos_plus = ["data/*.geojson"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

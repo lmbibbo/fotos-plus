@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 INDEX_VERSION = 1
-SUGGESTIONS_VERSION = 1
+SUGGESTIONS_VERSION = 2
 
 SOURCE_DATETIME_ORIGINAL = "exif-datetime-original"
 SOURCE_DATETIME = "exif-datetime"
@@ -13,9 +13,16 @@ STATUS_SUGGESTED = "sugerido"
 LOCATION_KNOWN = "known"
 LOCATION_UNKNOWN = "unknown"
 
+COUNTRY_SOURCE_COORDINATES = "coordenadas"
+COUNTRY_SOURCE_UNAVAILABLE = "no-disponible"
+
 PROVISIONAL_NOTICE = (
     "sugerencias de viajes y periodos sin confirmar: no son viajes ni periodos "
     "definitivos, y se reescriben en cada escaneo"
+)
+
+COUNTRIES_UNAVAILABLE_NOTICE = (
+    "pais no disponible: la version del conjunto de paises no cubre esta coordenada"
 )
 
 
@@ -110,12 +117,46 @@ class ScanResult:
 
 
 @dataclass
+class TripLocation:
+    country: Optional[str] = None
+    countries: list[str] = field(default_factory=list)
+    source: str = COUNTRY_SOURCE_COORDINATES
+
+    @property
+    def resolved(self) -> bool:
+        return self.country is not None
+
+    @property
+    def ambiguous(self) -> bool:
+        """El viaje cruza países, pero ninguno concentra más fotos que otro."""
+        return self.country is None and len(self.countries) > 1
+
+    def to_dict(self) -> dict:
+        return {
+            "country": self.country,
+            "countries": list(self.countries),
+            "source": self.source,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Optional[dict]) -> "TripLocation":
+        if not isinstance(data, dict):
+            return cls()
+        return cls(
+            country=data.get("country"),
+            countries=list(data.get("countries") or []),
+            source=data.get("source", COUNTRY_SOURCE_COORDINATES),
+        )
+
+
+@dataclass
 class TripSuggestion:
     photo_count: int
     first_captured_at: str
     last_captured_at: str
     location_state: str = LOCATION_KNOWN
     status: str = STATUS_SUGGESTED
+    location: Optional[TripLocation] = None
 
     def to_dict(self) -> dict:
         return {
@@ -124,16 +165,19 @@ class TripSuggestion:
             "photo_count": self.photo_count,
             "first_captured_at": self.first_captured_at,
             "last_captured_at": self.last_captured_at,
+            "location": self.location.to_dict() if self.location is not None else None,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "TripSuggestion":
+        raw = data.get("location")
         return cls(
             photo_count=data["photo_count"],
             first_captured_at=data["first_captured_at"],
             last_captured_at=data["last_captured_at"],
             location_state=data.get("location_state", LOCATION_KNOWN),
             status=data.get("status", STATUS_SUGGESTED),
+            location=TripLocation.from_dict(raw) if isinstance(raw, dict) else None,
         )
 
 
@@ -175,6 +219,8 @@ class SuggestionsResult:
     undated_photo_count: int = 0
     provisional: bool = True
     notice: str = PROVISIONAL_NOTICE
+    countries_version: Optional[int] = None
+    countries_notice: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -183,6 +229,8 @@ class SuggestionsResult:
             "notice": self.notice,
             "root": self.root,
             "scanned_at": self.scanned_at,
+            "countries_version": self.countries_version,
+            "countries_notice": self.countries_notice,
             "trips": [trip.to_dict() for trip in self.trips],
             "periods": [period.to_dict() for period in self.periods],
             "reference_locatable_count": self.reference_locatable_count,
@@ -200,8 +248,30 @@ class SuggestionsResult:
             undated_photo_count=data.get("undated_photo_count", 0),
             provisional=data.get("provisional", True),
             notice=data.get("notice", PROVISIONAL_NOTICE),
+            countries_version=data.get("countries_version"),
+            countries_notice=data.get("countries_notice"),
         )
 
     @property
     def trips_to_audit_count(self) -> int:
         return sum(period.photo_count for period in self.periods)
+
+    @property
+    def trips_with_country_count(self) -> int:
+        return sum(
+            1
+            for trip in self.trips
+            if trip.location is not None and trip.location.resolved
+        )
+
+    @property
+    def trips_without_country_count(self) -> int:
+        return len(self.trips) - self.trips_with_country_count
+
+    @property
+    def multi_country_trips_count(self) -> int:
+        return sum(
+            1
+            for trip in self.trips
+            if trip.location is not None and len(trip.location.countries) > 1
+        )

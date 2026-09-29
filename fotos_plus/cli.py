@@ -14,6 +14,7 @@ from .index import (
     write_suggestions,
 )
 from .photos import EXTENSION_ONLY_EXTENSIONS, FULLY_READABLE_EXTENSIONS
+from .places import countries_version, country_of
 from .progress import ProgressReporter, progress_enabled
 from .scanner import ScanRootError, scan
 
@@ -89,6 +90,17 @@ def _print_summary(index_path: Path, result, stream) -> None:
 def _print_suggestion_summary(path: Path, result, stream) -> None:
     counts = suggestions_counts(result)
     print(f"Sugerencias de viaje: {counts['trips']}", file=stream)
+    if result.countries_version is not None:
+        print(f"Viajes con pais: {counts['trips_with_country']}", file=stream)
+        print(f"Viajes sin pais: {counts['trips_without_country']}", file=stream)
+        if counts["multi_country_trips"]:
+            print(
+                f"Viajes que cruzan paises: {counts['multi_country_trips']}",
+                file=stream,
+            )
+        print(
+            f"Version del conjunto de paises: {result.countries_version}", file=stream
+        )
     print(f"Periodos sugeridos sin ubicacion: {counts['periods']}", file=stream)
     print(f"Fotos por auditar: {counts['photos_to_audit']}", file=stream)
     print(
@@ -100,7 +112,34 @@ def _print_suggestion_summary(path: Path, result, stream) -> None:
 
 def _write_suggestion_file(result, index_path: Path):
     suggestions_path = suggestions_path_next_to(index_path)
-    suggestions = build_suggestions(result.photos, result.root, result.scanned_at)
+    try:
+        version = countries_version()
+        notice = None
+    except Exception as error:
+        version = None
+        notice = str(error)
+
+    if version is None:
+
+        def classify(photo):
+            return None
+
+    else:
+
+        def classify(photo):
+            if not photo.has_position:
+                return None
+            country = country_of(photo.latitude, photo.longitude)
+            return country.name if country is not None else None
+
+    suggestions = build_suggestions(
+        result.photos,
+        result.root,
+        result.scanned_at,
+        classify=classify,
+        countries_version=version,
+        countries_notice=notice,
+    )
     return write_suggestions(suggestions, suggestions_path), suggestions
 
 
