@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from fotos_plus.cli import EXIT_OK, EXIT_PATH_ERROR, EXIT_USAGE, main
-from fotos_plus.index import read_index
+from fotos_plus.index import read_index, read_suggestions, suggestions_path_next_to
 from tests.conftest import make_image
 
 
@@ -114,9 +114,10 @@ def test_index_dir_where_the_index_is_written(tmp_path: Path, capsys) -> None:
     assert code == EXIT_OK
     assert destino.is_dir()
     written = list(destino.glob("*.json"))
-    assert len(written) == 1
-    assert read_index(written[0]).root == str(library)
-    assert str(written[0]) in out
+    assert len(written) == 2
+    index_file = next(path for path in written if "sugerencias" not in path.name)
+    assert read_index(index_file).root == str(library)
+    assert str(index_file) in out
 
 
 def test_index_wins_over_index_dir(tmp_path: Path, capsys) -> None:
@@ -154,8 +155,9 @@ def test_default_index_path_is_used_when_not_given(
     index_path = state / "fotos-plus" / "indexes"
     assert index_path.is_dir()
     written = list(index_path.glob("*.json"))
-    assert len(written) == 1
-    assert str(written[0]) in out
+    assert len(written) == 2
+    index_file = next(path for path in written if "sugerencias" not in path.name)
+    assert str(index_file) in out
 
 
 def test_summary_starts_on_its_own_line_after_progress(
@@ -243,3 +245,135 @@ def test_progress_reaches_one_hundred_percent(
     out = capsys.readouterr().out
 
     assert "30/30 (100%)" in out
+
+
+TAG_DATETIME_ORIGINAL = 0x9003
+
+
+def build_library_with_positions(root: Path) -> Path:
+    from tests.conftest import EXIF_DATETIME_ORIGINAL, make_image_with_gps
+
+    library = root / "fotos"
+    library.mkdir()
+    make_image_with_gps(
+        library / "viaje.jpg",
+        latitude=(34, 36, 12.0),
+        longitude=(58, 22, 54.0),
+        latitude_ref="S",
+        longitude_ref="W",
+    )
+    make_image(
+        library / "periodo.jpg",
+        exif={TAG_DATETIME_ORIGINAL: "2020:01:05 09:00:00"},
+        color="blue",
+    )
+    (library / "captura.png").write_bytes(
+        make_image(root / "origen.png", color="green").read_bytes()
+    )
+    return library
+
+
+def test_scan_writes_suggestions_next_to_the_index(tmp_path: Path, capsys) -> None:
+    library = build_library_with_positions(tmp_path)
+    index_path = tmp_path / "indice.json"
+
+    code = main(["scan", str(library), "--index", str(index_path)])
+
+    assert code == EXIT_OK
+    suggestions_path = suggestions_path_next_to(index_path)
+    assert suggestions_path.is_file()
+    assert read_suggestions(suggestions_path).root == str(library)
+
+
+def test_summary_reports_suggestions_not_confirmed_trips(
+    tmp_path: Path, capsys
+) -> None:
+    library = build_library_with_positions(tmp_path)
+    index_path = tmp_path / "indice.json"
+
+    main(["scan", str(library), "--index", str(index_path)])
+    out = capsys.readouterr().out
+    suggestions = read_suggestions(suggestions_path_next_to(index_path))
+
+    assert f"Sugerencias de viaje: {len(suggestions.trips)}" in out
+    assert f"Periodos sugeridos sin ubicacion: {len(suggestions.periods)}" in out
+    assert str(suggestions_path_next_to(index_path)) in out
+    assert "viajes confirmados" not in out.lower()
+    lowered = out.lower()
+    assert "periodos confirmados" not in lowered
+
+
+def test_index_dir_also_receives_the_suggestions_file(tmp_path: Path, capsys) -> None:
+    library = build_library_with_positions(tmp_path)
+    destino = tmp_path / "mis-indices"
+
+    main(["scan", str(library), "--index-dir", str(destino)])
+
+    written = list(destino.glob("*-sugerencias.json"))
+    assert len(written) == 1
+    assert read_suggestions(written[0]).root == str(library)
+    assert len(list(destino.glob("*.json"))) == 2
+
+
+def test_suggestion_failure_does_not_stop_the_index(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    import fotos_plus.cli as cli
+
+    library = build_library_with_positions(tmp_path)
+    index_path = tmp_path / "indice.json"
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("agrupado roto")
+
+    monkeypatch.setattr(cli, "build_suggestions", broken)
+    code = main(["scan", str(library), "--index", str(index_path)])
+
+    captured = capsys.readouterr()
+    assert code == EXIT_OK
+    assert index_path.is_file()
+    assert read_index(index_path).root == str(library)
+    assert not suggestions_path_next_to(index_path).exists()
+    assert "No se genero el archivo de sugerencias" in captured.err
+
+
+def test_scan_does_not_mark_suggestions_as_confirmed_in_the_file(
+    tmp_path: Path,
+) -> None:
+    library = build_library_with_positions(tmp_path)
+    index_path = tmp_path / "indice.json"
+
+    main(["scan", str(library), "--index", str(index_path)])
+    loaded = read_suggestions(suggestions_path_next_to(index_path))
+
+    assert loaded.provisional is True
+    assert all(trip.status == "sugerido" for trip in loaded.trips)
+    assert all(period.status == "sugerido" for period in loaded.periods)
+
+
+def test_scan_of_folder_without_positions_still_writes_suggestions(
+    tmp_path: Path,
+) -> None:
+    library = build_library(tmp_path)
+    index_path = tmp_path / "indice.json"
+
+    code = main(["scan", str(library), "--index", str(index_path)])
+
+    assert code == EXIT_OK
+    loaded = read_suggestions(suggestions_path_next_to(index_path))
+    assert loaded.trips == []
+
+
+def test_scan_of_empty_folder_still_writes_suggestions(tmp_path: Path) -> None:
+    empty = tmp_path / "vacia"
+    empty.mkdir()
+    index_path = tmp_path / "indice.json"
+
+    code = main(["scan", str(empty), "--index", str(index_path)])
+
+    assert code == EXIT_OK
+    suggestions_path = suggestions_path_next_to(index_path)
+    assert suggestions_path.is_file()
+    loaded = read_suggestions(suggestions_path)
+    assert loaded.trips == []
+    assert loaded.periods == []

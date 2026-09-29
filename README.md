@@ -20,8 +20,9 @@ estable y coherente con el criterio por el que se agruparon.
 
 ## Estado
 
-Proyecto en fase inicial: el escaneo de carpetas ya está implementado; la organización
-por fechas, lugares y gente, y el visualizador, siguen pendientes.
+Proyecto en fase inicial: el escaneo de carpetas y las sugerencias de viajes y períodos ya
+están implementados; la organización definitiva, la auditoría manual y el visualizador,
+siguen pendientes.
 
 ## Uso
 
@@ -41,7 +42,24 @@ fotos-plus scan "C:\fotos\vacaciones" --index ./escaneo.index.json
 Para ver los formatos admitidos: `fotos-plus scan --help`.
 
 El escaneo recorre la carpeta y sus subdirectorios, y **no mueve, renombra ni modifica**
-ninguna foto.
+ninguna foto. El resumen informa los dos archivos escritos:
+
+```text
+Carpeta escaneada: C:\fotos\vacaciones
+Fotos encontradas: 4805
+Duplicados: 0
+Archivos con error: 0
+Indice: C:\...\5d863d53b7cdd449.json
+Sugerencias de viaje: 45
+Periodos sugeridos sin ubicacion: 15
+Fotos por auditar: 919
+Fotos ubicables por referencia: 155
+Fotos sin fecha: 0
+Sugerencias: C:\...\5d863d53b7cdd449-sugerencias.json
+```
+
+Si el cálculo de sugerencias falla, el inventario se escribe igual y el comando avisa por
+stderr que el archivo de sugerencias no se generó, sin abortar el escaneo.
 
 ### Lanzador para Windows
 
@@ -86,7 +104,13 @@ Cada entrada del índice incluye:
 | `sha256` | Hash del contenido, base de la detección de duplicados |
 | `captured_at` | Fecha de captura en ISO 8601, o `null` si no hay dato |
 | `captured_at_source` | De dónde salió la fecha: `exif-datetime-original` o `exif-datetime` |
+| `latitude`, `longitude` | Coordenadas decimales, o `null` si la foto no tiene posición válida |
 | `duplicate_of` | Ruta de la foto original, o `null` si no es duplicado |
+
+Una foto se considera con posición válida solo cuando **ambas** coordenadas están
+presentes y no son `(0, 0)`. Se descartan los tres casos por separado: el bloque de GPS
+ausente, el bloque de GPS presente pero vacío, y la coordenada de origen. La regla vive
+en un solo lugar, así que el índice y las sugerencias no pueden discrepar.
 
 Un escaneo escribe un solo archivo con `version`, `root`, `scanned_at`, `photos` y
 `errors`. Cada intento de escaneo **reemplaza** el índice anterior de esa carpeta, así que
@@ -120,6 +144,58 @@ directorio de estado. La ruta exacta siempre la imprime el resumen, en la línea
 `Indice:`.
 
 La carpeta de fotos no se modifica en ningún caso.
+
+## Sugerencias de viajes y períodos
+
+Junto al índice, cada escaneo escribe un segundo archivo:
+
+```text
+<hash-de-la-carpeta>.json              índice de inventario
+<hash-de-la-carpeta>-sugerencias.json  sugerencias de viajes y períodos
+```
+
+Los dos archivos van siempre juntos, en la misma carpeta: si usás `--index-dir`, ahí; si
+usás `--index`, junto al archivo indicado.
+
+**El archivo contiene sugerencias, no viajes ni períodos confirmados.** Por eso la
+palabra "sugerencias" está en el nombre, y además el contenido declara `"provisional":
+true` y un aviso. Un consumidor tiene que presentar esa información como sugerida.
+
+El archivo trae, por grupo, la cantidad de fotos y la primera y la última fecha. **No
+lista las fotos de cada grupo**: se cruza con el inventario por rango de fechas.
+
+Dos ejes van separados a propósito:
+
+| Eje | Valores | Qué significa |
+| --- | --- | --- |
+| `status` | siempre `sugerido` | Es una aproximación, no un dato confirmado |
+| `location_state` | `known` / `unknown` | Si la ubicación se conoce o no |
+
+Una sugerencia de viaje puede tener la ubicación **conocida** y seguir siendo una
+**sugerencia**. Son cosas distintas: la primera viene de las coordenadas, la segunda
+depende de que el agrupado sea automático.
+
+Cómo se agrupan:
+
+- **Sugerencias de viaje**: se ordenan las fotos con posición válida por fecha de captura
+  y se mantiene la misma sugerencia mientras la distancia a la foto anterior sea menor a
+  **200 km**. Un traslado parte la sugerencia; un traslado largo dentro de un mismo lugar
+  también. La fecha ordena, pero nunca parte por sí sola.
+- **Períodos sin ubicación**: las fotos sin posición válida se agrupan por día, y dos
+  días se unen en el mismo período cuando hay **1 día vacío o menos** entre ellos. Un
+  período nunca dice que su ubicación se conoce.
+- **Ubicables por referencia**: las fotos sin posición que comparten día con alguna foto
+  con posición válida se marcan con un conteo (`reference_locatable_count`) y quedan
+  fuera de los períodos: ese día ya está anclado a un lugar, así que no necesitan
+  asignación manual. No se les copia la coordenada de la foto con GPS del mismo día,
+  porque un día puede tener dos lugares distintos.
+- **Fotos sin fecha**: se declaran aparte en `undated_photo_count` y no entran en ningún
+  viaje ni período, porque no se pueden ordenar por fecha ni asignar a un día. No se les
+  inventa ninguna.
+
+El archivo se **reescribe por completo en cada escaneo** y no admite edición manual: es
+derivado y provisional. Cualquier revisión manual tendrá que vivir más adelante en otro
+archivo, que el escaneo lea y no sobrescriba.
 
 ## Progreso del escaneo
 
@@ -172,7 +248,13 @@ Cualquier otro archivo se ignora en silencio.
   entra al índice con su hash y su tamaño, pero puede quedar con `captured_at` en `null`
   aunque tenga EXIF.
 - **Sin EXIF, la fecha queda vacía**: no se completa con la fecha de modificación del
-  archivo, para no confundir "tomada sin fecha" con "modificada después".
+  archivo, para no confundir "tomada sin fecha" con "modificada después". Una foto sin
+  fecha tampoco entra en las sugerencias de viajes ni en los períodos; se cuenta aparte
+  en `undated_photo_count`.
+- **Las sugerencias no son definitivas**: el archivo se reescribe en cada escaneo y no
+  guarda ninguna revisión manual. Los viajes y períodos definitivos, con su lugar
+  confirmado, todavía no existen.
+- **El umbral de 200 km no se puede ajustar sin reescanear**: está fijo en esta versión.
 - **EXIF no guarda zona horaria**: `captured_at` se guarda tal cual, sin ajuste.
 - **Un archivo con extensión de foto pero ilegible** no se registra como foto: aparece en
   `errors` y el escaneo sigue con el resto.

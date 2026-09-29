@@ -3,8 +3,27 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fotos_plus.index import default_index_path, index_path_for, read_index, write_index
-from fotos_plus.models import Photo, ScanError, ScanResult
+from fotos_plus.index import (
+    default_index_path,
+    index_path_for,
+    read_index,
+    read_suggestions,
+    suggestions_path_for,
+    suggestions_path_next_to,
+    write_index,
+    write_suggestions,
+)
+from fotos_plus.models import (
+    LOCATION_KNOWN,
+    LOCATION_UNKNOWN,
+    STATUS_SUGGESTED,
+    PeriodSuggestion,
+    Photo,
+    ScanError,
+    ScanResult,
+    SuggestionsResult,
+    TripSuggestion,
+)
 
 
 def make_result(root: Path) -> ScanResult:
@@ -172,4 +191,122 @@ def test_index_dir_is_created_when_missing(tmp_path: Path) -> None:
 
     assert destino.is_dir()
     assert read_index(index_path_for(fotos, destino)).photos[0].name == "una.jpg"
+
+
+def make_suggestions(root: Path) -> SuggestionsResult:
+    return SuggestionsResult(
+        root=str(root),
+        scanned_at="2026-09-28T14:03:11",
+        trips=[
+            TripSuggestion(
+                photo_count=857,
+                first_captured_at="2026-09-09T08:00:00",
+                last_captured_at="2026-09-21T19:00:00",
+                location_state=LOCATION_KNOWN,
+                status=STATUS_SUGGESTED,
+            )
+        ],
+        periods=[
+            PeriodSuggestion(
+                photo_count=12,
+                first_captured_at="2024-03-01T10:00:00",
+                last_captured_at="2024-03-04T18:00:00",
+                location_state=LOCATION_UNKNOWN,
+                status=STATUS_SUGGESTED,
+            )
+        ],
+        reference_locatable_count=155,
+        undated_photo_count=3,
+    )
+
+
+def test_suggestions_round_trip_keeps_every_value(tmp_path: Path) -> None:
+    result = make_suggestions(tmp_path)
+    path = write_suggestions(result, tmp_path / "sugerencias.json")
+
+    loaded = read_suggestions(path)
+
+    assert loaded.to_dict() == result.to_dict()
+
+
+def test_suggestions_declare_themselves_provisional(tmp_path: Path) -> None:
+    path = write_suggestions(make_suggestions(tmp_path), tmp_path / "sugerencias.json")
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    assert data["provisional"] is True
+    assert "sugerencias" in data["notice"].lower()
+    assert all(trip["status"] == STATUS_SUGGESTED for trip in data["trips"])
+    assert all(period["status"] == STATUS_SUGGESTED for period in data["periods"])
+
+
+def test_suggestions_keep_location_state_separate_from_status(tmp_path: Path) -> None:
+    path = write_suggestions(make_suggestions(tmp_path), tmp_path / "sugerencias.json")
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    assert data["trips"][0]["location_state"] == LOCATION_KNOWN
+    assert data["periods"][0]["location_state"] == LOCATION_UNKNOWN
+
+
+def test_suggestions_have_their_own_format_version(tmp_path: Path) -> None:
+    path = write_suggestions(make_suggestions(tmp_path), tmp_path / "sugerencias.json")
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    assert data["version"] == 1
+    assert data["root"] == str(tmp_path)
+    assert data["scanned_at"] == "2026-09-28T14:03:11"
+
+
+def test_write_suggestions_leaves_a_single_file_and_no_temporary(
+    tmp_path: Path,
+) -> None:
+    path = write_suggestions(make_suggestions(tmp_path), tmp_path / "sugerencias.json")
+
+    assert path.is_file()
+    assert [item.name for item in tmp_path.iterdir()] == ["sugerencias.json"]
+
+
+def test_suggestions_path_for_shares_the_root_name_with_the_index(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "fotos"
+    destino = tmp_path / "mis-indices"
+
+    index = index_path_for(root, destino)
+    suggestions = suggestions_path_for(root, destino)
+
+    assert suggestions.parent == destino
+    assert suggestions.name.startswith(index.stem)
+    assert "sugerencias" in suggestions.name
+
+
+def test_suggestions_path_next_to_an_explicit_index(tmp_path: Path) -> None:
+    index = tmp_path / "mi-indice.json"
+    suggestions = suggestions_path_next_to(index)
+
+    assert suggestions.parent == tmp_path
+    assert suggestions.name == "mi-indice-sugerencias.json"
+
+
+def test_two_folders_scanned_to_the_same_dir_do_not_overwrite_suggestions(
+    tmp_path: Path,
+) -> None:
+    destino = tmp_path / "mis-indices"
+    first = tmp_path / "vacaciones"
+    second = tmp_path / "cumpleanos"
+    first.mkdir()
+    second.mkdir()
+
+    write_suggestions(make_suggestions(first), suggestions_path_for(first, destino))
+    write_suggestions(make_suggestions(second), suggestions_path_for(second, destino))
+
+    files = sorted(item.name for item in destino.iterdir())
+    assert len(files) == 2
+    assert read_suggestions(suggestions_path_for(first, destino)).root == str(first)
+    assert read_suggestions(suggestions_path_for(second, destino)).root == str(second)
+
+
+def test_suggestions_counts_the_photos_that_need_auditing(tmp_path: Path) -> None:
+    result = make_suggestions(tmp_path)
+
+    assert result.trips_to_audit_count == 12
 

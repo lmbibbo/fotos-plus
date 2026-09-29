@@ -20,6 +20,7 @@ from tests.conftest import (
     SOURCE_DATETIME_ORIGINAL,
     make_image,
     make_image_with_exif_ifd,
+    make_image_with_gps,
 )
 
 TAG_DATETIME_ORIGINAL = 0x9003
@@ -161,6 +162,25 @@ def test_garbage_with_photo_extension_raises(tmp_path: Path) -> None:
         identify(broken, "rota.jpg")
 
 
+def test_truncated_png_is_reported_as_error(tmp_path: Path) -> None:
+    source = make_image(tmp_path / "origen.png")
+    original = source.read_bytes()
+    truncated = tmp_path / "truncada.png"
+    truncated.write_bytes(original[: len(original) // 2])
+    with pytest.raises(PhotoError):
+        identify(truncated, "truncada.png")
+
+
+def test_valid_png_survives_the_metadata_read(tmp_path: Path) -> None:
+    photo_path = make_image(
+        tmp_path / "mapa.png", exif={TAG_DATETIME_ORIGINAL: EXIF_DATETIME_ORIGINAL}
+    )
+    photo = identify(photo_path, "mapa.png")
+    assert photo.extension == ".png"
+    assert photo.captured_at == "2024-07-15T18:22:04"
+    assert photo.has_position is False
+
+
 def test_heic_accepted_by_extension_even_if_unreadable(tmp_path: Path) -> None:
     fake = tmp_path / "iphone.heic"
     fake.write_bytes(b"no es heic de verdad")
@@ -168,3 +188,119 @@ def test_heic_accepted_by_extension_even_if_unreadable(tmp_path: Path) -> None:
     assert photo.extension == ".heic"
     assert photo.captured_at is None
     assert photo.size_bytes == fake.stat().st_size
+
+
+def test_position_from_gps_ifd(tmp_path: Path) -> None:
+    photo_path = make_image_with_gps(
+        tmp_path / "buenosaires.jpg",
+        latitude=(34, 36, 12.0),
+        longitude=(58, 22, 54.0),
+        latitude_ref="S",
+        longitude_ref="W",
+    )
+    photo = identify(photo_path, "buenosaires.jpg")
+    assert photo.latitude == pytest.approx(-34.603333, abs=1e-5)
+    assert photo.longitude == pytest.approx(-58.381667, abs=1e-5)
+    assert photo.has_position is True
+
+
+def test_position_northern_eastern_hemisphere(tmp_path: Path) -> None:
+    photo_path = make_image_with_gps(
+        tmp_path / "colombia.jpg",
+        latitude=(4, 42, 0.0),
+        longitude=(74, 4, 48.0),
+        latitude_ref="N",
+        longitude_ref="W",
+    )
+    photo = identify(photo_path, "colombia.jpg")
+    assert photo.latitude == pytest.approx(4.7, abs=1e-5)
+    assert photo.longitude == pytest.approx(-74.08, abs=1e-5)
+
+
+def test_position_absent_without_gps_ifd(tmp_path: Path) -> None:
+    photo_path = make_image(tmp_path / "captura.jpg")
+    photo = identify(photo_path, "captura.jpg")
+    assert photo.latitude is None
+    assert photo.longitude is None
+    assert photo.has_position is False
+
+
+def test_position_absent_when_gps_ifd_is_empty(tmp_path: Path) -> None:
+    photo_path = make_image_with_gps(
+        tmp_path / "vacia.jpg",
+        latitude=None,
+        longitude=None,
+        empty_ifd=True,
+    )
+    photo = identify(photo_path, "vacia.jpg")
+    assert photo.latitude is None
+    assert photo.longitude is None
+    assert photo.has_position is False
+
+
+def test_position_zero_zero_is_not_a_position(tmp_path: Path) -> None:
+    photo_path = make_image_with_gps(
+        tmp_path / "fallofix.jpg",
+        latitude=(0, 0, 0.0),
+        longitude=(0, 0, 0.0),
+    )
+    photo = identify(photo_path, "fallofix.jpg")
+    assert photo.latitude is None
+    assert photo.longitude is None
+    assert photo.has_position is False
+
+
+def test_position_requires_both_axes(tmp_path: Path) -> None:
+    photo_path = make_image_with_gps(
+        tmp_path / "solo_lat.jpg",
+        latitude=(34, 36, 12.0),
+        longitude=None,
+    )
+    photo = identify(photo_path, "solo_lat.jpg")
+    assert photo.latitude is None
+    assert photo.longitude is None
+
+
+def test_photo_without_gps_keeps_capture_date(tmp_path: Path) -> None:
+    photo_path = make_image(
+        tmp_path / "fecha.jpg", exif={TAG_DATETIME_ORIGINAL: EXIF_DATETIME_ORIGINAL}
+    )
+    photo = identify(photo_path, "fecha.jpg")
+    assert photo.captured_at == "2024-07-15T18:22:04"
+    assert photo.latitude is None
+
+
+def test_photo_with_gps_keeps_capture_date(tmp_path: Path) -> None:
+    photo_path = make_image_with_gps(
+        tmp_path / "congps.jpg",
+        latitude=(34, 36, 12.0),
+        longitude=(58, 22, 54.0),
+    )
+    photo = identify(photo_path, "congps.jpg")
+    assert photo.captured_at == "2024-07-15T18:22:04"
+    assert photo.has_position is True
+
+
+def test_position_costs_no_extra_image_open(tmp_path: Path, monkeypatch) -> None:
+    from PIL import Image as pil_image
+
+    photo_path = make_image_with_gps(
+        tmp_path / "unapertura.jpg",
+        latitude=(34, 36, 12.0),
+        longitude=(58, 22, 54.0),
+    )
+
+    opens: list[Path] = []
+    real_open = pil_image.open
+
+    def counting_open(file, *args, **kwargs):
+        opens.append(file)
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(pil_image, "open", counting_open)
+    photo = identify(photo_path, "unapertura.jpg")
+    monkeypatch.undo()
+
+    assert photo.has_position is True
+    assert photo.captured_at == "2024-07-15T18:22:04"
+    assert len(opens) == 1

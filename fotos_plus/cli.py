@@ -5,7 +5,14 @@ import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
-from .index import index_path_for, indexes_dir, write_index
+from .grouping import build_suggestions, suggestions_counts
+from .index import (
+    index_path_for,
+    indexes_dir,
+    suggestions_path_next_to,
+    write_index,
+    write_suggestions,
+)
 from .photos import EXTENSION_ONLY_EXTENSIONS, FULLY_READABLE_EXTENSIONS
 from .progress import ProgressReporter, progress_enabled
 from .scanner import ScanRootError, scan
@@ -79,6 +86,24 @@ def _print_summary(index_path: Path, result, stream) -> None:
         print(f"  - {error.relative_path}: {error.error}", file=stream)
 
 
+def _print_suggestion_summary(path: Path, result, stream) -> None:
+    counts = suggestions_counts(result)
+    print(f"Sugerencias de viaje: {counts['trips']}", file=stream)
+    print(f"Periodos sugeridos sin ubicacion: {counts['periods']}", file=stream)
+    print(f"Fotos por auditar: {counts['photos_to_audit']}", file=stream)
+    print(
+        f"Fotos ubicables por referencia: {counts['reference_locatable']}", file=stream
+    )
+    print(f"Fotos sin fecha: {counts['undated']}", file=stream)
+    print(f"Sugerencias: {path}", file=stream)
+
+
+def _write_suggestion_file(result, index_path: Path):
+    suggestions_path = suggestions_path_next_to(index_path)
+    suggestions = build_suggestions(result.photos, result.root, result.scanned_at)
+    return write_suggestions(suggestions, suggestions_path), suggestions
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     try:
@@ -103,6 +128,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         index_path = args.index or index_path_for(root, args.index_dir)
         write_index(result, index_path)
         _print_summary(index_path, result, sys.stdout)
+        try:
+            suggestions_path, suggestions = _write_suggestion_file(result, index_path)
+        except Exception as error:
+            print(
+                "No se genero el archivo de sugerencias de viajes y periodos: "
+                f"{error}",
+                file=sys.stderr,
+            )
+            return EXIT_OK
+        _print_suggestion_summary(suggestions_path, suggestions, sys.stdout)
         return EXIT_OK
 
     parser.print_usage(sys.stderr)

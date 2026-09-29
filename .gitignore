@@ -218,6 +218,8 @@ __marimo__/
 # Indices locales de escaneo: son datos de la maquina, nunca se versionan.
 # El nombre real es el hash de la ruta escaneada (16 hexadecimales) mas .json,
 # y el lanzador .bat los deja en la carpeta desde la que se ejecuta.
+# El siguiente patron cubre tambien el archivo de sugerencias
+# (<hash>-sugerencias.json), porque el asterisco absorbe el sufijo.
 /[0-9a-f]*.json
 *.index.json
 .indices/
