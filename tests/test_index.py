@@ -17,6 +17,7 @@ from fotos_plus.models import (
     LOCATION_KNOWN,
     LOCATION_UNKNOWN,
     STATUS_SUGGESTED,
+    SUGGESTIONS_VERSION,
     PeriodSuggestion,
     Photo,
     ScanError,
@@ -251,9 +252,68 @@ def test_suggestions_have_their_own_format_version(tmp_path: Path) -> None:
     path = write_suggestions(make_suggestions(tmp_path), tmp_path / "sugerencias.json")
     data = json.loads(path.read_text(encoding="utf-8"))
 
-    assert data["version"] == 1
+    assert data["version"] == SUGGESTIONS_VERSION
     assert data["root"] == str(tmp_path)
     assert data["scanned_at"] == "2026-09-28T14:03:11"
+
+
+def test_suggestions_declare_their_countries_version(tmp_path: Path) -> None:
+    result = make_suggestions(tmp_path)
+    result.countries_version = 3
+    path = write_suggestions(result, tmp_path / "sugerencias.json")
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    assert data["countries_version"] == 3
+    assert read_suggestions(path).countries_version == 3
+
+
+def test_suggestions_from_before_the_country_field_still_load(tmp_path: Path) -> None:
+    """Un archivo escrito por la version 1 se lee completo, sin perder sugerencias."""
+    legacy = {
+        "version": 1,
+        "provisional": True,
+        "notice": "sugerencias de viajes y periodos sin confirmar",
+        "root": str(tmp_path),
+        "scanned_at": "2026-09-28T14:03:11",
+        "trips": [
+            {
+                "status": STATUS_SUGGESTED,
+                "location_state": LOCATION_KNOWN,
+                "photo_count": 857,
+                "first_captured_at": "2026-09-09T08:00:00",
+                "last_captured_at": "2026-09-21T19:00:00",
+            },
+            {
+                "status": STATUS_SUGGESTED,
+                "location_state": LOCATION_KNOWN,
+                "photo_count": 441,
+                "first_captured_at": "2024-03-25T10:00:00",
+                "last_captured_at": "2024-04-03T20:00:00",
+            },
+        ],
+        "periods": [
+            {
+                "status": STATUS_SUGGESTED,
+                "location_state": LOCATION_UNKNOWN,
+                "photo_count": 12,
+                "first_captured_at": "2024-03-01T10:00:00",
+                "last_captured_at": "2024-03-04T18:00:00",
+            }
+        ],
+        "reference_locatable_count": 155,
+        "undated_photo_count": 3,
+    }
+    path = tmp_path / "sugerencias.json"
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    loaded = read_suggestions(path)
+
+    assert len(loaded.trips) == 2
+    assert len(loaded.periods) == 1
+    assert loaded.countries_version is None
+    for trip in loaded.trips:
+        assert trip.location is None
+    assert loaded.trips_with_country_count == 0
 
 
 def test_write_suggestions_leaves_a_single_file_and_no_temporary(
