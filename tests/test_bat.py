@@ -12,6 +12,12 @@ from tests.conftest import make_image
 
 BAT = Path(__file__).resolve().parent.parent / "fotos-plus.bat"
 
+
+def index_files(directory: Path) -> list[Path]:
+    return sorted(
+        path for path in directory.glob("*.json") if "sugerencias" not in path.name
+    )
+
 pytestmark = pytest.mark.skipif(
     sys.platform != "win32" or shutil.which("cmd") is None,
     reason="el lanzador es un archivo .bat y necesita cmd.exe",
@@ -109,7 +115,8 @@ def test_bat_passes_index_dir_through(tmp_path: Path) -> None:
     result = run_bat(str(library), "--index-dir", str(destino), cwd=tmp_path)
 
     assert result.returncode == 0, result.stderr
-    assert len(list(destino.glob("*.json"))) == 1
+    assert len(index_files(destino)) == 1
+    assert len(list(destino.glob("*-sugerencias.json"))) == 1
 
 
 def test_bat_saves_the_index_in_the_invocation_folder_by_default(
@@ -122,12 +129,13 @@ def test_bat_saves_the_index_in_the_invocation_folder_by_default(
     result = run_bat("scan", str(library), cwd=elsewhere)
 
     assert result.returncode == 0, result.stderr
-    written = list(elsewhere.glob("*.json"))
+    written = index_files(elsewhere)
     assert len(written) == 1
     assert [photo.name for photo in read_index(written[0]).photos] == [
         "dos.jpg",
         "una.jpg",
     ]
+    assert len(list(elsewhere.glob("*-sugerencias.json"))) == 1
 
 
 def test_bat_default_folder_applies_when_scan_is_implied(tmp_path: Path) -> None:
@@ -136,7 +144,7 @@ def test_bat_default_folder_applies_when_scan_is_implied(tmp_path: Path) -> None
     result = run_bat(str(library), cwd=tmp_path)
 
     assert result.returncode == 0, result.stderr
-    assert len(list(tmp_path.glob("*.json"))) == 1
+    assert len(index_files(tmp_path)) == 1
 
 
 def test_bat_explicit_index_wins_over_the_invocation_folder(tmp_path: Path) -> None:
@@ -147,7 +155,9 @@ def test_bat_explicit_index_wins_over_the_invocation_folder(tmp_path: Path) -> N
 
     assert result.returncode == 0, result.stderr
     assert puntual.is_file()
-    assert not [item for item in tmp_path.glob("*.json") if item != puntual]
+    extra = [item for item in index_files(tmp_path) if item != puntual]
+    assert not extra
+    assert (tmp_path / "puntual-sugerencias.json").is_file()
 
 
 def test_bat_explicit_index_dir_wins_over_the_invocation_folder(
@@ -159,7 +169,7 @@ def test_bat_explicit_index_dir_wins_over_the_invocation_folder(
     result = run_bat(str(library), "--index-dir", str(destino), cwd=tmp_path)
 
     assert result.returncode == 0, result.stderr
-    assert len(list(destino.glob("*.json"))) == 1
+    assert len(index_files(destino)) == 1
     assert not list(tmp_path.glob("*.json"))
 
 
