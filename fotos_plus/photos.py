@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import numbers
+from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .models import SOURCE_DATETIME, SOURCE_DATETIME_ORIGINAL, Photo
 
@@ -16,6 +17,9 @@ EXTENSION_ONLY_EXTENSIONS = frozenset({".heic", ".heif", ".dng", ".nef", ".cr2",
 SUPPORTED_EXTENSIONS = FULLY_READABLE_EXTENSIONS | EXTENSION_ONLY_EXTENSIONS
 
 HASH_CHUNK_SIZE = 1024 * 1024
+
+THUMBNAIL_SIZE = 200
+THUMBNAIL_QUALITY = 70
 
 EXIF_IFD_TAG = 0x8769
 EXIF_TAG_DATETIME_ORIGINAL = 0x9003
@@ -171,3 +175,23 @@ def identify(path: Path, relative_path: str) -> Photo:
         latitude=latitude,
         longitude=longitude,
     )
+
+
+def make_thumbnail(path: Path) -> bytes:
+    """Genera una miniatura JPEG de la foto, con la orientacion ya aplicada.
+
+    Aplica la transformacion EXIF antes de reducir, para que la miniatura salga con
+    la proporcion con la que se ve la foto. Si la foto no se puede leer, informa
+    `PhotoError` para que quien arma el visualizador pueda pasar a la siguiente.
+    """
+    try:
+        with Image.open(path) as image:
+            image = ImageOps.exif_transpose(image)
+            image.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE))
+            if image.mode not in ("RGB", "L"):
+                image = image.convert("RGB")
+            buffer = BytesIO()
+            image.save(buffer, format="JPEG", quality=THUMBNAIL_QUALITY)
+            return buffer.getvalue()
+    except (UnidentifiedImageError, OSError, ValueError) as error:
+        raise PhotoError(f"cannot read image: {error}") from error

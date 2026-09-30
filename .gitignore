@@ -221,6 +221,9 @@ __marimo__/
 # El siguiente patron cubre tambien el archivo de sugerencias
 # (<hash>-sugerencias.json), porque el asterisco absorbe el sufijo.
 /[0-9a-f]*.json
+# El visualizador se escribe junto al indice y hereda su nombre, asi que tambien
+# sale con el hash delante. Contiene miniaturas de la coleccion: nunca se versiona.
+/[0-9a-f]*.html
 *.index.json
 .indices/
 fotos-plus-index.json

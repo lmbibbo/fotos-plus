@@ -377,3 +377,83 @@ def test_scan_of_empty_folder_still_writes_suggestions(tmp_path: Path) -> None:
     loaded = read_suggestions(suggestions_path)
     assert loaded.trips == []
     assert loaded.periods == []
+
+
+def test_view_writes_an_html_next_to_the_index(tmp_path: Path, capsys) -> None:
+    library = build_library(tmp_path)
+    index_path = tmp_path / "indice.json"
+    assert main(["scan", str(library), "--index", str(index_path)]) == EXIT_OK
+
+    before_index = index_path.read_bytes()
+    before_suggestions = suggestions_path_next_to(index_path).read_bytes()
+
+    code = main(["view", str(index_path)])
+
+    assert code == EXIT_OK
+    generated = index_path.with_suffix(".html")
+    assert generated.is_file()
+    assert "Visualizador" in capsys.readouterr().out
+    # el indice y las sugerencias no se tocan
+    assert index_path.read_bytes() == before_index
+    assert suggestions_path_next_to(index_path).read_bytes() == before_suggestions
+
+
+def test_view_output_html_has_one_card_per_suggestion(tmp_path: Path) -> None:
+    library = build_library(tmp_path)
+    index_path = tmp_path / "indice.json"
+    assert main(["scan", str(library), "--index", str(index_path)]) == EXIT_OK
+
+    assert main(["view", str(index_path)]) == EXIT_OK
+
+    document = index_path.with_suffix(".html").read_text(encoding="utf-8")
+    loaded = read_suggestions(suggestions_path_next_to(index_path))
+    expected = len(loaded.trips) + len(loaded.periods)
+    assert document.count('<article class="card"') == max(expected, 1)
+    assert "data:image/jpeg;base64," in document
+
+
+def test_view_writes_a_flat_grid_without_suggestions(tmp_path: Path) -> None:
+    library = build_library(tmp_path)
+    index_path = tmp_path / "indice.json"
+    assert main(["scan", str(library), "--index", str(index_path)]) == EXIT_OK
+    suggestions_path_next_to(index_path).unlink()
+
+    code = main(["view", str(index_path)])
+
+    assert code == EXIT_OK
+    document = index_path.with_suffix(".html").read_text(encoding="utf-8")
+    assert 'class="card flat"' in document
+
+
+def test_view_reports_a_missing_index(tmp_path: Path, capsys) -> None:
+    code = main(["view", str(tmp_path / "no-existe.json")])
+
+    assert code == EXIT_PATH_ERROR
+    assert "No existe el indice" in capsys.readouterr().err
+
+
+def test_view_honours_an_explicit_output_path(tmp_path: Path) -> None:
+    library = build_library(tmp_path)
+    index_path = tmp_path / "indice.json"
+    assert main(["scan", str(library), "--index", str(index_path)]) == EXIT_OK
+    destino = tmp_path / "salida" / "visor.html"
+
+    code = main(["view", str(index_path), "--output", str(destino)])
+
+    assert code == EXIT_OK
+    assert destino.is_file()
+    assert not index_path.with_suffix(".html").exists()
+
+
+def test_view_reports_a_failure_with_a_non_zero_exit(tmp_path: Path, capsys) -> None:
+    library = build_library(tmp_path)
+    index_path = tmp_path / "indice.json"
+    assert main(["scan", str(library), "--index", str(index_path)]) == EXIT_OK
+    # un directorio ocupa la ruta de salida, asi que no se puede escribir el archivo
+    destino = tmp_path / "visor.html"
+    destino.mkdir()
+
+    code = main(["view", str(index_path), "--output", str(destino)])
+
+    assert code != EXIT_OK
+    assert "No se genero el visualizador" in capsys.readouterr().err

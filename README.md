@@ -15,13 +15,14 @@ fotos por su contenido, no solo por el nombre del archivo.
 
 ## Visualizador
 
-Incluye un visualizador para recorrer las fotos ya organizadas, mostrando un orden
-estable y coherente con el criterio por el que se agruparon.
+`fotos-plus view` genera un archivo HTML autocontenido con las fotos ya escaneadas, agrupadas
+según el archivo de sugerencias. No necesita servidor ni conexión: las miniaturas van
+embebidas en el propio archivo, así que se abre haciendo doble clic.
 
 ## Estado
 
-Proyecto en fase inicial: el escaneo de carpetas y las sugerencias de viajes y períodos ya
-están implementados; la organización definitiva, la auditoría manual y el visualizador,
+Proyecto en fase inicial: el escaneo de carpetas, las sugerencias de viajes y períodos y el
+primer visualizador ya están implementados; la organización definitiva y la auditoría manual
 siguen pendientes.
 
 ## Uso
@@ -65,6 +66,33 @@ Sugerencias: C:\...\a1b2c3d4e5f60718-sugerencias.json
 
 Si el cálculo de sugerencias falla, el inventario se escribe igual y el comando avisa por
 stderr que el archivo de sugerencias no se generó, sin abortar el escaneo.
+
+### Generar el visualizador
+
+```bash
+# Escribir el HTML junto al índice
+fotos-plus view ./indice.json
+
+# Escribirlo en otra ruta
+fotos-plus view ./indice.json --output ./salida/visor.html
+```
+
+El comando **no toca** el índice ni el archivo de sugerencias: solo los lee y escribe el HTML.
+
+Cómo se agrupan las fotos:
+
+- Una tarjeta por cada viaje sugerido y una por cada período sugerido, ordenadas de la fecha
+  más antigua a la más reciente.
+- Cada tarjeta muestra hasta cinco miniaturas de 200 px con la orientación EXIF ya aplicada,
+  el rango de fechas, el país cuando el viaje lo declara y cuántas fotos tiene el grupo.
+- Como los viajes tienen prioridad, un período contenido dentro de un viaje se queda sin fotos
+  propias. Su tarjeta se muestra igual, avisando de eso, para que el grupo no desaparezca.
+- La cantidad de fotos que muestra cada tarjeta es la real del grupo. El `photo_count` de las
+  sugerencias cuenta solo las fotos con posición, así que queda muy por debajo del total.
+- Las fotos que no caen en ningún viaje ni período van a una tarjeta final de "sin clasificar".
+
+Si el índice no tiene archivo de sugerencias contiguo, el comando no falla: genera el mismo HTML
+con todas las fotos en una grilla plana, sin agrupar.
 
 ### Lanzador para Windows
 
@@ -284,9 +312,9 @@ Una carpeta sin fotos no muestra ninguna línea de progreso.
 
 | Código | Significado |
 | --- | --- |
-| `0` | Escaneo terminado (puede haber archivos con error, que se informan) |
+| `0` | Terminó bien (puede haber archivos con error, que se informan) |
 | `1` | Argumentos inválidos |
-| `2` | La ruta indicada no existe, no es una carpeta o no se puede leer |
+| `2` | La ruta indicada no existe, no es una carpeta, no se puede leer, o no se pudo escribir el HTML |
 
 ## Formatos admitidos
 
@@ -318,6 +346,11 @@ Cualquier otro archivo se ignora en silencio.
 - **Un directorio sin permiso de lectura** no corta el escaneo: se anota en `errors` y se
   continúa con los demás directorios.
 - El escaneo no es incremental: cada corrida vuelve a hashear todos los archivos.
+- **El visualizador no permite ver el original**: solo miniaturas de 200 px, sin pantalla
+  completa, sin zoom y sin navegación por teclado. Agrandar la miniatura significa agrandar el
+  HTML, así que el tamaño está fijo en esta etapa.
+- **El visualizador se regenera entero en cada `view`**: no hay caché, así que abrirlo varias
+  veces sobre el mismo índice vuelve a generar todas las miniaturas.
 
 ## Desarrollo
 

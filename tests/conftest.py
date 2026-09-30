@@ -62,6 +62,25 @@ def make_image_with_gps(
     return path
 
 
+def make_sized_image(
+    path: Path,
+    width: int = 400,
+    height: int = 300,
+    orientation: int | None = None,
+    color: str = "purple",
+) -> Path:
+    """Crea una imagen de tamano concreto, opcionalmente con marca de orientacion EXIF."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGB", (width, height), color=color)
+    if orientation is None:
+        image.save(path)
+        return path
+    metadata = Image.Exif()
+    metadata[0x0112] = orientation
+    image.save(path, exif=metadata)
+    return path
+
+
 @pytest.fixture
 def image_factory(tmp_path: Path):
     def factory(name: str, exif: dict[int, str] | None = None, color: str = "red") -> Path:
@@ -87,4 +106,5 @@ __all__ = [
     "make_image",
     "make_image_with_exif_ifd",
     "make_image_with_gps",
+    "make_sized_image",
 ]

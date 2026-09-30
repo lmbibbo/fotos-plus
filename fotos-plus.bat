@@ -20,7 +20,8 @@ if not "%PROBE%"=="%ARGS_RAW%" set "HAS_INDEX_OPT=1"
 
 rem Sin argumentos: mostrar la ayuda general
 if "%~1"=="" goto no_args
-if /I "%~1"=="scan" goto explicit
+if /I "%~1"=="scan" goto explicit_scan
+if /I "%~1"=="view" goto explicit_view
 if "%~1"=="-h" goto help
 if "%~1"=="--help" goto help
 
@@ -30,11 +31,16 @@ set "ARGS=scan %*"
 set "USE_INVOCATION_DIR=1"
 goto run
 
-rem El primer argumento ya es un subcomando u opcion: se pasa tal cual
-:explicit
+rem El escaneo ya nombro su subcomando: se pasa tal cual y con la carpeta por defecto
+:explicit_scan
 set "ARGS=%*"
 set "USE_INVOCATION_DIR=1"
 goto run
+
+rem El visor no acepta --index-dir, asi que se pasa sin anadir nada
+:explicit_view
+set "ARGS=%*"
+goto run_as_is
 
 :no_args
 :help

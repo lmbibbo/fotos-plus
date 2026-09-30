@@ -9,9 +9,11 @@ from fotos_plus.photos import (
     EXTENSION_ONLY_EXTENSIONS,
     FULLY_READABLE_EXTENSIONS,
     SUPPORTED_EXTENSIONS,
+    THUMBNAIL_SIZE,
     PhotoError,
     identify,
     is_supported,
+    make_thumbnail,
 )
 from tests.conftest import (
     EXIF_DATETIME,
@@ -21,6 +23,7 @@ from tests.conftest import (
     make_image,
     make_image_with_exif_ifd,
     make_image_with_gps,
+    make_sized_image,
 )
 
 TAG_DATETIME_ORIGINAL = 0x9003
@@ -304,3 +307,40 @@ def test_position_costs_no_extra_image_open(tmp_path: Path, monkeypatch) -> None
     assert photo.has_position is True
     assert photo.captured_at == "2024-07-15T18:22:04"
     assert len(opens) == 1
+
+
+def test_thumbnail_of_a_landscape_photo_keeps_its_proportion(tmp_path: Path) -> None:
+    from PIL import Image as pil_image
+    from io import BytesIO
+
+    path = make_sized_image(tmp_path / "apaisada.jpg", width=400, height=300)
+
+    data = make_thumbnail(path)
+
+    with pil_image.open(BytesIO(data)) as thumbnail:
+        assert thumbnail.width == THUMBNAIL_SIZE
+        assert thumbnail.height < thumbnail.width
+        assert thumbnail.format == "JPEG"
+
+
+def test_thumbnail_of_a_vertical_photo_is_vertical(tmp_path: Path) -> None:
+    """Los pixeles estan apaisados y la marca de orientacion dice que se rote."""
+    from PIL import Image as pil_image
+    from io import BytesIO
+
+    path = make_sized_image(
+        tmp_path / "vertical.jpg", width=400, height=300, orientation=6
+    )
+
+    data = make_thumbnail(path)
+
+    with pil_image.open(BytesIO(data)) as thumbnail:
+        assert thumbnail.height > thumbnail.width
+
+
+def test_thumbnail_of_an_unreadable_photo_reports_a_photo_error(tmp_path: Path) -> None:
+    path = tmp_path / "rota.jpg"
+    path.write_bytes(b"esto no es una imagen")
+
+    with pytest.raises(PhotoError):
+        make_thumbnail(path)

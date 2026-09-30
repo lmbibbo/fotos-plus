@@ -17,6 +17,7 @@ from .photos import EXTENSION_ONLY_EXTENSIONS, FULLY_READABLE_EXTENSIONS
 from .places import countries_version, country_of
 from .progress import ProgressReporter, progress_enabled
 from .scanner import ScanRootError, scan
+from .viewer import build_view
 
 EXIT_OK = 0
 EXIT_USAGE = 1
@@ -70,6 +71,21 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Carpeta donde se guardan los indices, uno por carpeta escaneada "
             f"(por defecto: {indexes_dir()})."
+        ),
+    )
+
+    view_parser = subparsers.add_parser(
+        "view",
+        help="Genera un visualizador HTML autocontenido desde un indice escaneado.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    view_parser.add_argument("index", type=Path, help="Ruta del archivo de indice.")
+    view_parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help=(
+            "Ruta del HTML a escribir. Por defecto se escribe junto al indice."
         ),
     )
     return parser
@@ -143,6 +159,14 @@ def _write_suggestion_file(result, index_path: Path):
     return write_suggestions(suggestions, suggestions_path), suggestions
 
 
+def _write_viewer_file(index_path: Path, output: Optional[Path]) -> Path:
+    document = build_view(index_path)[0]
+    target = Path(output) if output is not None else index_path.with_suffix(".html")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(document, encoding="utf-8")
+    return target
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     try:
@@ -151,6 +175,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parser.print_usage(sys.stderr)
         print(str(error), file=sys.stderr)
         return EXIT_USAGE
+
+    if args.command == "view":
+        index_path = Path(args.index)
+        if not index_path.is_file():
+            print(f"No existe el indice: {index_path}", file=sys.stderr)
+            return EXIT_PATH_ERROR
+        try:
+            target = _write_viewer_file(index_path, args.output)
+        except (OSError, ValueError) as error:
+            print(f"No se genero el visualizador: {error}", file=sys.stderr)
+            return EXIT_PATH_ERROR
+        print(f"Visualizador: {target}", file=sys.stdout)
+        return EXIT_OK
 
     if args.command == "scan":
         root = Path(args.path)

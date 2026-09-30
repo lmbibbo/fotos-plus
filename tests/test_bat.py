@@ -187,3 +187,24 @@ def test_bat_does_not_modify_the_photo_folder(tmp_path: Path) -> None:
     run_bat(str(library), "--index", str(tmp_path / "i.json"), cwd=tmp_path)
 
     assert sorted(path.name for path in library.rglob("*")) == antes
+
+
+def test_bat_passes_view_through_without_assuming_scan(tmp_path: Path) -> None:
+    library = build_library(tmp_path)
+    index_path = tmp_path / "i.json"
+    run_bat(str(library), "--index", str(index_path), cwd=tmp_path)
+
+    result = run_bat("view", str(index_path), cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert "Visualizador" in result.stdout
+    assert index_path.with_suffix(".html").is_file()
+
+
+def test_bat_passes_view_help_through(tmp_path: Path) -> None:
+    result = run_bat("view", "--help", cwd=tmp_path)
+
+    assert result.returncode == 0
+    assert "--output" in result.stdout
+    # el visor no debe recibir la carpeta de indices, que es propia del escaneo
+    assert "--index-dir" not in result.stdout
