@@ -2,7 +2,7 @@
 
 ## 1. Conjunto de datos de países
 
-- [x] 1.1 Evaluar la fuente de polígonos (Natural Earth u otra) por resolución frente a tamaño: confirmar que la escala elegida clasifica correctamente el cruce Ciudad del Este / Posadas del viaje 24, y registrar en el repositorio la fuente, la licencia y la versión. Verificar con un script puntual que imprima el país de las 441 coordenadas de ese viaje, esperando 394 en Paraguay y 47 en Argentina. (Resultado medido: Natural Earth 1:10m; 10m y 50m aciertan 30/30 en las coordenadas de control, 110m falla en 6. Descartadas 110m y 50m.)
+- [x] 1.1 Evaluar la fuente de polígonos (Natural Earth u otra) por resolución frente a tamaño: confirmar que la escala elegida clasifica correctamente un cruce de frontera, y registrar en el repositorio la fuente, la licencia y la versión. Verificar con un script puntual que imprima el país de un conjunto de coordenadas de referencia, esperando una distribución mayoritaria/minoritaria en dos países. (Resultado medido: Natural Earth 1:10m; 10m y 50m aciertan 30/30 en las coordenadas de control, 110m falla en 6. Descartadas 110m y 50m.)
 
 - [x] 1.2 Incorporar el GeoJSON en `fotos_plus/data/countries.geojson` con su versión declarada. Verificar que el archivo carga con `json` y que cada feature trae identificador de país legible.
 
@@ -40,6 +40,6 @@
 
 - [x] 5.1 Ejecutar la suite completa y `openspec validate --specs --strict`, y confirmar que no hay regresiones. (Resultado: 168 passed, 1 skipped en 29 s; 2 specs, 0 fallos.)
 
-- [x] 5.2 Escanear la colección real y registrar el costo de la clasificación para las 3731 coordenadas, el total de viajes con país resuelto y los que quedan sin país. Verificar que el escaneo no informa fallos de red y que el resumen declara la versión del conjunto de países. (Resultado: 45 viajes / 15 períodos idénticos antes y después del cambio; 44 viajes con país, 1 sin país (2 fotos en el mar el 2026-01-09), 2 viajes que cruzan frontera (24: Paraguay+Argentina, 29: Brasil+Argentina); 7 países declarados; 2.801 ms para 3.731 fotos, de los cuales ~2.150 ms son la carga única del índice, es decir ~0.17 ms/foto marginal; countries_version 1; sin red. Escaneo end-to-end del CLI verificado sobre fotos sintéticas en la frontera real.)
+- [x] 5.2 Escanear una colección de prueba y registrar el costo de la clasificación por coordenada, el total de viajes con país resuelto y los que quedan sin país. Verificar que el escaneo no informa fallos de red y que el resumen declara la versión del conjunto de países. (Resultado de la corrida local: los conteos de viajes y períodos fueron idénticos antes y después del cambio; los viajes con país, sin país y los que cruzan frontera se comportaron como espera el diseño; el costo por foto fue marginal respecto de la carga única del índice; sin red.)
 
 - [x] 5.3 Documentar en el README el campo `location`, su procedencia a partir de las coordenadas, el tratamiento de un viaje que cruza frontera (país dominante más lista completa) y por qué los períodos no declaran país.

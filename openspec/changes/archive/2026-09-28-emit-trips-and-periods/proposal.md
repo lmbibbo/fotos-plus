@@ -2,9 +2,17 @@
 
 ## Why
 
-El escaneo actual solo produce el inventario de fotos y descarta la posición, así que no hay forma de saber dónde se tomó cada foto ni de armar viajes. Además, el escaneo es el único momento en que el sistema recorre la colección completa: si el agrupado se calculara "al leer", el visualizador tendría que recorrer las 4805 fotos y resolver el agrupado en cada consulta.
+El escaneo actual solo produce el inventario de fotos y descarta la posición, así que no hay
+forma de saber dónde se tomó cada foto ni de armar viajes. Además, el escaneo es el único
+momento en que el sistema recorre la colección completa: si el agrupado se calculara "al
+leer", el visualizador tendría que recorrer todas las fotos y resolver el agrupado en cada
+consulta.
 
-Medido sobre una colección real de 4805 fotos, la cobertura de GPS es dispareja: 3731 fotos tienen posición utilizable (77.6%) y 1074 no la tienen. Esas 1074 no están repartidas al azar, se concentran en periodos sin señal. La última foto con GPS de toda la colección es del 2026-07-11; desde entonces hay 919 fotos sin posición que se agrupan en 15 periodos. Reconstruir eso "al leer" significa repetir el mismo trabajo en cada consulta, sobre datos que no cambian entre escaneos.
+El agrupado tiene que vivir en un archivo, no calcularse al leer. En una colección con GPS
+intermitente la cobertura es dispareja: una parte de las fotos tiene posición utilizable y
+otra no, y esa parte sin posición se concentra en períodos sin señal en vez de repartirse al
+azar. Reconstruir eso "al leer" significa repetir el mismo trabajo en cada consulta, sobre
+datos que no cambian entre escaneos.
 
 El agrupado se escribe como un segundo archivo JSON que el escaneo genera una sola vez, y las fotos sin posición dejan de descartarse: pasan a un período explícito que el usuario puede auditar y asignar a un lugar a mano.
 
@@ -39,7 +47,9 @@ Lo que produce este archivo son **sugerencias**, no viajes y períodos definitiv
 - `fotos_plus/cli.py`: el resumen informa la ruta del archivo de sugerencias y los conteos de períodos.
 - Módulo nuevo de agrupado, con la geometría y la partición.
 - `.gitignore`: el patrón actual `/[0-9a-f]*.json` ya cubre también `<hash>-sugerencias.json`, porque el asterisco absorbe el sufijo. No hace falta una regla nueva.
-- Costo medido: leer todo el EXIF agrega 1.4 ms por foto (12% sobre los 9.9 ms del sha256), o unos 7.5 s sobre un escaneo de 62.2 s. El agrupado agrega una partición lineal sobre 4805 elementos, despreciable frente a la lectura de archivos.
+- Costo medido: leer todo el EXIF agrega del orden de milisegundos por foto, un porcentaje
+  pequeño del costo de hashear el archivo, y es despreciable frente al tiempo total de un
+  escaneo real. El agrupado agrega una partición lineal sobre la lista de fotos.
 - No hay dependencia de otros cambios: la extracción de coordenadas se implementa acá.
 
 ## Rollback

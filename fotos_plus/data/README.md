@@ -14,19 +14,19 @@ funcione sin conexión.
 
 ## Por qué 1:10m y no una escala menor
 
-Medido sobre los polígonos de este repositorio, contra 30 coordenadas de referencia en
-los 7 países que aparecen en la colección de prueba:
+Medido sobre los polígonos de este repositorio, contra un conjunto de coordenadas de
+referencia de los tests (`tests/test_places.py`), que cubre siete países:
 
 | escala | tamaño | aciertos | falla en |
 | --- | --- | --- | --- |
-| 1:110m | 819 KB | 26/30 | Mar del Plata, Montevideo, Punta del Este, Foz do Iguazu |
-| 1:50m | 3.0 MB | 26/30 | Punta del Este, Ciudad de la Costa, Ciudad del Este, Rio de Janeiro |
+| 1:110m | 819 KB | 26/30 | ciudades costeras del Atlántico |
+| 1:50m | 3.0 MB | 26/30 | Punta del Este y una frontera terrestre |
 | 1:10m | 13.0 MB | 30/30 | (ninguna) |
 
-Las escalas 1:110m y 1:50m cortan la costa y, en 1:50m, desplazan la frontera entre
-Ciudad del Este y Brasil. Ambas fallan en el mismo tipo de caso: ciudades costeras y
-fronteras. Sobre la colección de prueba, 1:10m clasifica 3631 de 3731 coordenadas con
-posición (97,3%); las 100 restantes caen en agua.
+Las escalas 1:110m y 1:50m cortan la costa y, en 1:50m, desplazan una frontera terrestre
+cerca de una ciudad fronteriza. Ambas fallan en el mismo tipo de caso: ciudades costeras y
+fronteras. Sobre la colección de prueba del repositorio, 1:10m clasifica la gran mayoría de
+las coordenadas con posición; las restantes caen en agua.
 
 ## Cómo regenerarlo
 
