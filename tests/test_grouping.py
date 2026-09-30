@@ -25,8 +25,9 @@ CORDOBA = (-31.4201, -64.1888)
 MEDELLIN = (6.2442, -75.5812)
 LIMA = (-12.0464, -77.0428)
 NEARBY = (-34.1550, -58.4800)
-# Frontera real: Ciudad del Este (Paraguay) y Foz do Iguacu (Brasil) distan ~10 km,
-# asi que las dos quedan en un mismo viaje de 200 km y el viaje declara dos paises.
+# Par de coordenadas de una frontera terrestre real: Ciudad del Este (Paraguay) y
+# Foz do Iguazu (Brasil) distan ~10 km, asi que las dos quedan en un mismo viaje de
+# 200 km y el viaje declara dos paises. Geometria publica, usada como caso de prueba.
 CIUDAD_DEL_ESTE = (-25.5095, -54.6112)
 FOZ_DO_IGUAZU = (-25.5478, -54.5883)
 
@@ -310,22 +311,22 @@ def test_trip_declares_the_country_of_its_photos() -> None:
 
 
 def test_country_is_derived_per_photo_not_from_a_centroid() -> None:
-    """El viaje 24 real: 441 fotos que cruzan la frontera, mayoria en Paraguay.
+    """Un viaje que cruza la frontera, con mayoria en un pais y minoria en el otro.
 
-    El centroide cae en Paraguay y borraria a Argentina. Clasificando foto por foto,
-    las 47 fotos de Argentina siguen en el conteo.
+    El centroide cae en el pais mayoritario y borraria al minoritario. Clasificando
+    foto por foto, las fotos del segundo pais siguen en el conteo.
     """
     frontera = {
         (CIUDAD_DEL_ESTE[0], CIUDAD_DEL_ESTE[1]): "Paraguay",
         (FOZ_DO_IGUAZU[0], FOZ_DO_IGUAZU[1]): "Argentina",
     }
     photos = []
-    for indice in range(388):
-        photos.append(located(f"py{indice:03d}", "2024-03-25", CIUDAD_DEL_ESTE))
-    for indice in range(53):
-        photos.append(located(f"ar{indice:03d}", "2024-03-26", FOZ_DO_IGUAZU))
+    for indice in range(88):
+        photos.append(located(f"py{indice:03d}", "2024-06-11", CIUDAD_DEL_ESTE))
+    for indice in range(12):
+        photos.append(located(f"ar{indice:03d}", "2024-06-12", FOZ_DO_IGUAZU))
     result = build_suggestions(
-        photos, "/fotos", "2024-04-04T00:00:00", classify=by_position(frontera)
+        photos, "/fotos", "2024-06-20T00:00:00", classify=by_position(frontera)
     )
     location = result.trips[0].location
     assert location is not None
@@ -342,10 +343,10 @@ def test_interleaved_photos_of_two_countries_still_count_correctly() -> None:
     }
     photos = []
     for indice in range(10):
-        photos.append(located(f"a{indice}", "2024-03-25", CIUDAD_DEL_ESTE))
-        photos.append(located(f"b{indice}", "2024-03-25", FOZ_DO_IGUAZU))
+        photos.append(located(f"a{indice}", "2024-06-11", CIUDAD_DEL_ESTE))
+        photos.append(located(f"b{indice}", "2024-06-11", FOZ_DO_IGUAZU))
     result = build_suggestions(
-        photos, "/fotos", "2024-04-04T00:00:00", classify=by_position(frontera)
+        photos, "/fotos", "2024-06-20T00:00:00", classify=by_position(frontera)
     )
     location = result.trips[0].location
     assert location is not None
@@ -360,11 +361,11 @@ def test_a_tie_leaves_the_dominant_country_undefined() -> None:
         (FOZ_DO_IGUAZU[0], FOZ_DO_IGUAZU[1]): "Argentina",
     }
     photos = [
-        located("a", "2024-03-25", CIUDAD_DEL_ESTE),
-        located("b", "2024-03-26", FOZ_DO_IGUAZU),
+        located("a", "2024-06-11", CIUDAD_DEL_ESTE),
+        located("b", "2024-06-12", FOZ_DO_IGUAZU),
     ]
     result = build_suggestions(
-        photos, "/fotos", "2024-04-04T00:00:00", classify=by_position(frontera)
+        photos, "/fotos", "2024-06-20T00:00:00", classify=by_position(frontera)
     )
     location = result.trips[0].location
     assert location is not None

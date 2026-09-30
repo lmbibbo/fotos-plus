@@ -42,24 +42,25 @@ fotos-plus scan "C:\fotos\vacaciones" --index ./escaneo.index.json
 Para ver los formatos admitidos: `fotos-plus scan --help`.
 
 El escaneo recorre la carpeta y sus subdirectorios, y **no mueve, renombra ni modifica**
-ninguna foto. El resumen informa los dos archivos escritos:
+ninguna foto. El resumen informa los dos archivos escritos (ejemplo con datos inventados,
+para que ningún dato real de una colección aparezca en esta documentación):
 
 ```text
 Carpeta escaneada: C:\fotos\vacaciones
-Fotos encontradas: 4805
+Fotos encontradas: 1200
 Duplicados: 0
 Archivos con error: 0
-Indice: C:\...\5d863d53b7cdd449.json
-Sugerencias de viaje: 45
-Viajes con pais: 44
+Indice: C:\...\a1b2c3d4e5f60718.json
+Sugerencias de viaje: 12
+Viajes con pais: 11
 Viajes sin pais: 1
 Viajes que cruzan paises: 2
 Version del conjunto de paises: 1
-Periodos sugeridos sin ubicacion: 15
-Fotos por auditar: 919
-Fotos ubicables por referencia: 155
+Periodos sugeridos sin ubicacion: 3
+Fotos por auditar: 210
+Fotos ubicables por referencia: 90
 Fotos sin fecha: 0
-Sugerencias: C:\...\5d863d53b7cdd449-sugerencias.json
+Sugerencias: C:\...\a1b2c3d4e5f60718-sugerencias.json
 ```
 
 Si el cálculo de sugerencias falla, el inventario se escribe igual y el comando avisa por
@@ -206,12 +207,12 @@ archivo, que el escaneo lea y no sobrescriba.
 Cada foto con posición válida se clasifica en su país **por separado**, comparando su
 coordenada contra los polígonos de país que viajan dentro del propio paquete. Después se
 cuenta cuántos de cada país tiene cada viaje, y de ahí sale un objeto `location` en cada
-sugerencia de viaje:
+sugerencia de viaje (los nombres de abajo son ilustrativos):
 
 ```json
 "location": {
-  "country": "Paraguay",
-  "countries": ["Paraguay", "Argentina"],
+  "country": "Pais A",
+  "countries": ["Pais A", "Pais B"],
   "source": "coordenadas"
 }
 ```
@@ -224,12 +225,12 @@ sugerencia de viaje:
 
 Tres cosas que conviene tener claras:
 
-- **El país se cuenta foto por foto, nunca con el centroide del viaje.** El caso que obliga a
-  hacerlo: un viaje de 441 fotos con radio de 277 km alrededor de Ciudad del Este. Su
-  centroide cae en Paraguay, así que un método por centroide reportaría "Paraguay" y borraría
-  de la existencia las 47 fotos que cayó en Argentina. Clasificando cada foto, el viaje
-  declara Paraguay como dominante y Argentina en la lista: las dos cosas son verdad al mismo
-  tiempo.
+- **El país se cuenta foto por foto, nunca con el centroide del viaje.** El caso genérico que
+  obliga a hacerlo: un viaje que cruza una frontera y queda agrupado en una sola sugerencia
+  porque se cruzó el umbral de los 200 km por pasos, con fotos a ambos lados de la frontera.
+  Su centroide cae de un lado y "borraría" de la existencia las fotos del otro lado.
+  Clasificando cada foto, el viaje declara un país como dominante y el otro en la lista: las
+  dos cosas son verdad al mismo tiempo.
 - **Un empate no se resuelve.** Si dos países tienen la misma cantidad de fotos, `country`
   queda en `null` y los dos aparecen en `countries`. Se declara que no hay dominante en lugar
   de elegir uno en silencio.
@@ -244,8 +245,8 @@ a 2.
 
 **Los períodos no declaran país.** Un período agrupa fotos que no tienen posición, así que
 no hay nada que clasificar. Copiarle el país del viaje vecino afirmaría algo que ninguna foto
-del período respalda: un tramo del recorrido es "estuve en Paraguay" y otro "me mudé a
-Brasil", y ese "me mudé" no se puede poner con nombre. El campo `location` no existe en los
+del período respalda: un tramo del recorrido es "estuve en un país" y otro "me mudé a
+otro", y ese "me mudé" no se puede poner con nombre. El campo `location` no existe en los
 períodos, ni siquiera vacío.
 
 La clasificación es **completamente offline**: los polígonos se leen del paquete instalado,

@@ -3,13 +3,14 @@
 ## Why
 
 El archivo de sugerencias ya sabe qué viajes tienen coordenadas, pero no dice en qué
-país están. Medido sobre la colección real de 4805 fotos, las 3731 que tienen posición
-válida se reparten en 7 países y 55 lugares, así que el país es la etapa de enriquecimiento
-más barata que existe: es una categoría cerrada, se resuelve offline y sin ambigüedad.
+país están. En una colección con GPS presente, las fotos que tienen posición válida se
+reparten en varios países y lugares distintos, así que el país es la etapa de
+enriquecimiento más barata que existe: es una categoría cerrada, se resuelve offline y sin
+ambigüedad.
 
 `location_state: "known"` es además un nombre pobre. Hoy significa "tenemos coordenadas",
-no "sabemos dónde estamos", y el mismo campo aparece con valor `unknown` en los 15
-períodos que no tienen ninguna coordenada. Agregar el país como dato separado hace que
+no "sabemos dónde estamos", y el mismo campo aparece con valor `unknown` en los períodos
+que no tienen ninguna coordenada. Agregar el país como dato separado hace que
 "dónde" deje de ser implícito.
 
 ## What Changes
@@ -59,7 +60,7 @@ Ninguna. La capacidad de viajes y períodos ya existe y es la que cambia.
   dependencia de Python: la clasificación se implementa sobre la biblioteca estándar.
 - `fotos-plus.bat` y `tests/test_bat.py`: el lanzador sigue funcionando desde una copia del
   proyecto, así que la ruta de los datos tiene que resolverse también en ese caso.
-- Tamaño del escaneo: se agrega una clasificación por foto sobre 3731 coordenadas. Con
+- Tamaño del escaneo: se agrega una clasificación por foto sobre cada coordenada. Con
   índice espacial es despreciable, pero sin él sería lineal por foto contra cada polígono y
   hay que medirlo.
 - La ciudad queda fuera de alcance. Resolverla requiere un gazetteer y, sobre todo, decidir

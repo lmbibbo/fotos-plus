@@ -26,23 +26,24 @@ coordenadas, la escritura del agrupado y el tratamiento de las fotos sin posici�
 
 Por eso este cambio no depende de aquel ni comparte decisiones con él.
 
-Medidas sobre la colección real de 4805 fotos que condicionan el diseño:
+La forma del problema se midió sobre una colección de prueba local, que no se versiona y
+cuyos números no se reproducen acá. Sobre una colección con GPS intermitente, la medición
+que condiciona el diseño tiene esta forma:
 
 ```
-fotos con posicion utilizable:      3731 (77.6%)
-fotos sin posicion valida:          1074 (22.4%)
-  - en un dia que SI tiene gps:      155  (14% de las 1074) -> ubicables por referencia
-  - en un dia SIN gps:               919  (86% de las 1074) -> requieren auditoria
-periodos que cubren esas 919 fotos:  15   (corte: 1 dia vacio)
+fotos con posicion utilizable:      ~78% de la coleccion
+fotos sin posicion valida:          ~22% de la coleccion
+  - en un dia que SI tiene gps:      ~15% de las anteriores  -> ubicables por referencia
+  - en un dia SIN gps:               ~85% de las anteriores  -> requieren auditoria
+periodos que cubren esas fotos:      una decena   (corte: 1 dia vacio)
 fotos sin fecha de captura:            0
-sugerencias de viaje:                45
-ultima foto con gps de la coleccion: 2026-07-11
-periodo dominante:                  2026-09-09 .. 2026-09-21, 13 dias, 857 fotos (93%)
-saltos > 200 km entre consecutivas: 44 de 3730 (1.2%)
-costo de leer todo el EXIF:          1.4 ms/foto (12% del sha256)
+sugerencias de viaje:                decenas
+saltos > 200 km entre consecutivas:  ~1% de las fotos con posicion
+costo de leer todo el EXIF:          ~1 ms/foto
 ```
 
-El dato de los 13 períodos es lo que define el valor de esta decisión: una estructura que el usuario pueda auditar a mano solo es viable si son 13 registros, no 919.
+El dato de los períodos es lo que define el valor de esta decisión: una estructura que el
+usuario pueda auditar a mano solo es viable si son una decena de registros, no un millar.
 
 ## Goals / Non-Goals
 
@@ -64,13 +65,17 @@ El dato de los 13 períodos es lo que define el valor de esta decisión: una est
 - No se agrupa por personas.
 - No se guarda la altura, aunque el 100% de las fotos con GPS la traiga.
 - No se corrige la deriva de zona horaria entre países.
-- No se unifican los archivos de inventario y de sugerencias: son dos archivos porque el visualizador necesita los viajes sin arrastrar las 4805 entradas del inventario.
+- No se unifican los archivos de inventario y de sugerencias: son dos archivos porque el
+  visualizador necesita los viajes sin arrastrar todas las entradas del inventario.
 
 ## Decisions
 
 ### 1. El agrupado se escribe durante el escaneo, no se calcula al leer
 
-Se escribe un segundo archivo al terminar el escaneo. La razón es el costo: el escaneo es el único momento en que el sistema ya recorrió las 4805 fotos y ya tiene el `ScanResult` en memoria. Calcular al leer obligaría al visualizador a leer el índice completo y particionar en cada consulta, y esa partición depende de un umbral que el usuario puede querer ajustar.
+Se escribe un segundo archivo al terminar el escaneo. La razón es el costo: el escaneo es el
+único momento en que el sistema ya recorrió todas las fotos y ya tiene el `ScanResult` en
+memoria. Calcular al leer obligaría al visualizador a leer el índice completo y particionar
+en cada consulta, y esa partición depende de un umbral que el usuario puede querer ajustar.
 
 Alternativa descartada: calcular al leer. Se descarta porque paga el costo en cada consulta y porque hace imposible que el escaneo deje constancia de lo que no se pudo ubicar.
 
@@ -110,17 +115,29 @@ Consecuencia asumida: un traslado largo dentro de un mismo viaje lo parte en dos
 
 Las fotos sin posición se agrupan por día. Dos días sin posición se unen en el mismo período si hay como máximo 1 día intermedio sin ninguna foto sin posición; más allá, son dos períodos.
 
-El corte de 1 día vacío produce 15 períodos sobre la colección real. La medición previa del diseño decía 13 y fijaba un corte de 3 días, pero esa combinación no se reproduce: con 3 días vacíos el período dominante resultaba ser `2026-09-05 .. 2026-09-21` con 868 fotos, y con el corte estricto `2026-09-09 .. 2026-09-21` con 857. Se conserva la cifra del período dominante, que sí es reproducible, y se adopta el corte estricto: separa dos salidas distintas y evita fusionar la mañana y la tarde del 9 de septiembre con los días previos. El conteo de 13 queda anotado como una estimación que el escaneo real refutó.
+El corte de 1 día vacío produce una decena de períodos sobre la colección de prueba. La
+medición previa del diseño fijaba un corte de 3 días, pero esa combinación no se reproducía
+en el escaneo real: con 3 días vacíos el período dominante absorbía fotos de días previos que
+son un salida distinta, y con el corte estricto esos días quedan separados. Se conserva la
+cifra del período dominante, que sí es reproducible, y se adopta el corte estricto: separa
+dos salidas distintas y evita fusionar la mañana y la tarde de un mismo día con los días
+previos. El conteo original queda anotado como una estimación que el escaneo real refutó.
 
-Alternativa descartada: un solo período que abarque todo el conjunto. Se descarta porque con 45 sugerencias de viaje y 919 fotos sin ubicación, un único período no es auditable.
+Alternativa descartada: un solo período que abarque todo el conjunto. Se descarta porque con
+decenas de sugerencias de viaje y un millar de fotos sin ubicación, un único período no es
+auditable.
 
 Consecuencia asumida: un período puede incluir fotos de dos salidas distintas si hubo menos de 3 días sin fotografiar entre ellas. Se acepta; el visualizador muestra el rango de fechas completo y el usuario decide al auditar.
 
-### 6. "Ubicable por referencia" separa el 14% que no necesita trabajo manual
+### 6. "Ubicable por referencia" separa la fracción que no necesita trabajo manual
 
-De las 1074 fotos sin posición, 155 comparten día con alguna foto con posición válida. Esas no necesitan un lugar: el día ya está anclado a un lugar. Se marcan con un campo booleano y quedan fuera de los períodos.
+De las fotos sin posición, una fracción chico comparte día con alguna foto con posición
+válida. Esas no necesitan un lugar: el día ya está anclado a un lugar. Se marcan con un
+campo booleano y quedan fuera de los períodos.
 
-Esto reduce la auditoría manual de 1074 a 919 fotos, y más importante, reduce la cantidad de períodos de una forma que el usuario no tiene que decidir: la información ya está en el propio día.
+Esto reduce la auditoría manual a las que no tienen referencia, y más importante, reduce la
+cantidad de períodos de una forma que el usuario no tiene que decidir: la información ya
+está en el propio día.
 
 No se les asigna la coordenada de la foto con GPS del mismo día. Se marca la referencia pero no se copia el valor, porque un día puede tener dos lugares distintos y la elección sería arbitraria.
 
@@ -134,7 +151,12 @@ La regla vive en un solo lugar, en `photos.py`, y `trip-periods` la consume, par
 
 Cada viaje y cada período lleva un estado de ubicación, y el archivo lleva su marca de provisionalidad. Son cosas distintas y no deben codificarse en el mismo campo.
 
-El caso que obliga a separarlas: un viaje sugerido a partir de 857 fotos con GPS tiene la ubicación **conocida** y sigue siendo una **sugerencia**. Un período de 12 fotos no tiene ubicación conocida y también es una sugerencia. Un campo único que dijera "automático" o "desconocido" perdería la primera información, que es justamente la que el visualizador necesita para mostrar "sugerencia con lugar conocido" frente a "sugerencia sin lugar".
+El caso que obliga a separarlas: un viaje sugerido a partir de muchas fotos con GPS tiene
+la ubicación **conocida** y sigue siendo una **sugerencia**. Un período de unas pocas fotos
+no tiene ubicación conocida y también es una sugerencia. Un campo único que dijera
+"automático" o "desconocido" perdería la primera información, que es justamente la que el
+visualizador necesita para mostrar "sugerencia con lugar conocido" frente a "sugerencia sin
+lugar".
 
 ## Flujo
 
@@ -220,7 +242,10 @@ Escritura de los dos archivos, reutilizando la atomicidad existente:
 
 - **Un consumidor puede ignorar la marca de provisionalidad y tratar las sugerencias como hechos** → se mitiga en dos niveles, el nombre del archivo y el campo de provisionalidad, pero no se puede forzar desde el productor. La mitigación real es el consumidor: cuando exista el visualizador, su spec debe exigir que presente estas sugerencias como tales. Queda como open question porque depende de una spec que todavía no existe.
 
-- **Ajustar el umbral de 200 km exige reescanear 4805 fotos** → se acepta. El escaneo es idempotente y el costo dominante es la lectura de archivos, no el agrupado. Y al ser sugerencias, el costo de tener un umbral imperfecto es bajo: el escaneo siguiente lo reemplaza.
+- **Ajustar el umbral de 200 km exige reescanear la colección** → se acepta. El escaneo es
+  idempotente y el costo dominante es la lectura de archivos, no el agrupado. Y al ser
+  sugerencias, el costo de tener un umbral imperfecto es bajo: el escaneo siguiente lo
+  reemplaza.
 
 - **Una "estancia larga en casa" aparece como una sugerencia más** → se mitiga con el rango de fechas y con la marca de provisionalidad, que dejan claro que es una aproximación y no un traslado confirmado. Distinguir por dispersión y duración necesita un umbral más y no se justifica con esta colección.
 

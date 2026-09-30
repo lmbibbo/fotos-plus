@@ -200,9 +200,9 @@ def make_suggestions(root: Path) -> SuggestionsResult:
         scanned_at="2026-09-28T14:03:11",
         trips=[
             TripSuggestion(
-                photo_count=857,
-                first_captured_at="2026-09-09T08:00:00",
-                last_captured_at="2026-09-21T19:00:00",
+                photo_count=120,
+                first_captured_at="2025-05-02T08:00:00",
+                last_captured_at="2025-05-10T19:00:00",
                 location_state=LOCATION_KNOWN,
                 status=STATUS_SUGGESTED,
             )
@@ -216,7 +216,7 @@ def make_suggestions(root: Path) -> SuggestionsResult:
                 status=STATUS_SUGGESTED,
             )
         ],
-        reference_locatable_count=155,
+        reference_locatable_count=20,
         undated_photo_count=3,
     )
 
@@ -279,16 +279,16 @@ def test_suggestions_from_before_the_country_field_still_load(tmp_path: Path) ->
             {
                 "status": STATUS_SUGGESTED,
                 "location_state": LOCATION_KNOWN,
-                "photo_count": 857,
-                "first_captured_at": "2026-09-09T08:00:00",
-                "last_captured_at": "2026-09-21T19:00:00",
+                "photo_count": 120,
+                "first_captured_at": "2025-05-02T08:00:00",
+                "last_captured_at": "2025-05-10T19:00:00",
             },
             {
                 "status": STATUS_SUGGESTED,
                 "location_state": LOCATION_KNOWN,
-                "photo_count": 441,
-                "first_captured_at": "2024-03-25T10:00:00",
-                "last_captured_at": "2024-04-03T20:00:00",
+                "photo_count": 60,
+                "first_captured_at": "2025-02-10T10:00:00",
+                "last_captured_at": "2025-02-20T20:00:00",
             },
         ],
         "periods": [
@@ -300,7 +300,7 @@ def test_suggestions_from_before_the_country_field_still_load(tmp_path: Path) ->
                 "last_captured_at": "2024-03-04T18:00:00",
             }
         ],
-        "reference_locatable_count": 155,
+        "reference_locatable_count": 20,
         "undated_photo_count": 3,
     }
     path = tmp_path / "sugerencias.json"

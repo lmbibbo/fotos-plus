@@ -21,45 +21,41 @@ Estado actual, en `fotos_plus/`:
   sin `package-data`. El proyecto no tiene ninguna dependencia de red, de base de datos ni
   geográfica.
 
-Medición sobre la colección real de 4805 fotos que condiciona el diseño:
+La forma del problema se midió sobre una colección de prueba local, que no se versiona y
+cuyos números no se reproducen acá. Sobre una colección con GPS intermitente, la medición
+que condiciona el diseño tiene esta forma:
 
 ```
-fotos con posicion valida:                 3731
-fotos sin posicion valida:                 1074
-  - en un dia que SI tiene gps:              155  (referencia)
-  - en un dia SIN gps:                       919  (periodos)
-paises distintos en las 3731 con gps:          7
-lugares (celdas de 25 km):                    55
-viajes sugeridos:                              45
-viajes con radio > 50 km desde su centroide:   9
+fotos con posicion valida:                  ~78% de la coleccion
+fotos sin posicion valida:                  ~22% de la coleccion
+  - en un dia que SI tiene gps:              ~15% de las anteriores  (referencia)
+  - en un dia SIN gps:                       ~85% de las anteriores  (periodos)
+paises distintos entre las fotos con gps:      una decena
+viajes sugeridos:                              decenas
 ```
 
-El caso que decide el diseño es el **viaje 24**: 441 fotos entre el 2024-03-25 y el
-2024-04-03, con un radio de 277 km desde su centroide. Al cruzar el umbral de los 200 km
-por pasos, ese viaje quedó como uno solo y contiene fotos de los dos lados de la frontera
-entre Ciudad del Este (Paraguay) y Posadas/Foz (Argentina): 394 fotos en Paraguay y 47 en
-Argentina. El conteo exacto está medido con el polígono de cada foto, no estimado:
+El caso que decide el diseño es un **viaje que cruza una frontera**: se agrupó en una sola
+sugerencia porque el recorrido fue cruzando el umbral de los 200 km por pasos, y el radio
+desde su centroide llegó a cientos de kilómetros. Contiene fotos de los dos lados de una
+frontera terrestre, con un país concentrando la gran mayoría y el otro una minoría pequeña. El
+conteo exacto se mide con el polígono de cada foto, no estimado:
 
 ```
-   centroide del viaje 24 en (-25.96, -56.80)
+   centroide del viaje en (lat, lon)
                     |
                     v
    +-------------------------------------------+
-   |            PARAGUAY                        |
-   |      394 fotos (89%)                       |
+   |            PAIS A                         |
+   |      ~85-90% de las fotos                 |
    |            |                              |
    |     ------ + --------- frontera ---------- |
    |            |                              |
-   |        ARGENTINA                           |
-   |      47 fotos (11%)                        |
+   |        PAIS B                             |
+   |      ~10-15% de las fotos                 |
    +-------------------------------------------+
 
-   -> el centroide cae en Paraguay y "tacha" las 47 fotos de Argentina
+   -> el centroide cae en el pais A y "tacha" las fotos del pais B
 ```
-
-Nota: el segundo país es Argentina, no Brasil. Foz do Iguazú sí es Brasil, pero las 47
-fotos de ese tramo caen del lado argentino. El segundo viaje que cruza frontera es el 29
-(332 fotos: 248 en Brasil, 84 en Argentina).
 
 Un centroide no puede decidir el país de este viaje: no es que de lugar, es que el viaje
 no tiene un único lugar. Por eso la clasificación es por foto.
@@ -68,7 +64,7 @@ no tiene un único lugar. Por eso la clasificación es por foto.
 
 **Goals:**
 
-- Declarar el país de los 45 viajes, derivado de las coordenadas de sus fotos.
+- Declarar el país de cada viaje sugerido, derivado de las coordenadas de sus fotos.
 - Mantener el escaneo completamente offline: cero red, cero coordenadas salientes.
 - No romper a un consumidor que ya lee el archivo: `location_state` conserva su significado
   y el campo nuevo es opcional al leer.
@@ -90,18 +86,19 @@ no tiene un único lugar. Por eso la clasificación es por foto.
 
 Se clasifica cada foto con posición válida en su país y después se cuenta.
 
-La razón es el viaje 24. Un centroide resume la posición de un conjunto que se reparte
-entre dos países, y el resumen no pertenece a ninguno de los dos: cae en el país con más
-fotos y borra al otro de la existencia. Clasificando por foto, el problema no aparece: el
-viaje tiene 394 fotos en un país y 47 en el otro, y eso es un hecho, no una ambigüedad.
+La razón es un viaje que cruza una frontera terrestre. Un centroide resume la posición de un
+conjunto que se reparte entre dos países, y el resumen no pertenece a ninguno de los dos:
+cae en el país con más fotos y borra al otro de la existencia. Clasificando por foto, el
+problema no aparece: el viaje tiene fotos de un país y del otro, y eso es un hecho, no una
+ambigüedad.
 
 Consecuencia: el país dominante no siempre es "el país del viaje". Es el país donde estuvo
 la mayoría de las fotos, y la lista de países deja ver el resto. El archivo declara los dos
-datos, así que un consumidor puede mostrar "Paraguay, con un pasaje por Argentina" en lugar
-de escolher en silencio.
+datos, así que un consumidor puede mostrar "el país principal, con un pasaje por el otro" en
+lugar de escolher en silencio.
 
-Alternativa descartada: centroide del viaje. Se descarta por el viaje 24, y además por
-los otros 8 viajes con radio mayor a 50 km, donde el mismo problema aparece a menor escala.
+Alternativa descartada: centroide del viaje. Se descarta por el caso de arriba, y además por
+los otros viajes con radio mayor a 50 km, donde el mismo problema aparece a menor escala.
 
 ### 2. El viaje declara país dominante y lista de países, y el empate no se resuelve
 
@@ -121,7 +118,7 @@ que es exactamente lo que el diseño quiere evitar.
 
 ### 3. Los polígonos se cargan una vez por escaneo y se indexan por caja envolvente
 
-La clasificación es punto en polígono. Con ~180 países y 3731 coordenadas, la versión
+La clasificación es punto en polígono. Con ~180 países y miles de coordenadas, la versión
 ingenua serían 670.000 pruebas de segmento por escaneo. Se carga el conjunto una sola vez y
 se indexa por caja envolvente: cada polígono entra en una grilla según su caja, y una
 consulta solo mira los polígonos de la celda de la coordenada.
@@ -176,28 +173,19 @@ ejes que el diseño ya decidió mantener separados.
 
 ### 6. Los períodos no reciben país, y no se infiere de los vecinos
 
-Los 919 fotos de los 15 períodos no tienen coordenada. No hay nada que clasificar: el
+Los períodos sugeridos agrupan fotos que no tienen coordenada. No hay nada que clasificar: el
 geocodificación no es un problema de datos acá, es un problema de información ausente.
 
-Se podría cubrir el 80% de la auditoría manual (857 de 919 son del período del 2026-09-09)
-copiando el país del viaje inmediatamente anterior. Se descarta: el período es una
-declaración de que no sabemos dónde estaba el usuario, y completarlo con el país del viaje
-anterior afirma algo que ninguna coordenada de ese período respalda. Si el usuario estuvo
-en Paraguay y se mudó a Brasil a mitad de período, el archivo pasa a mentir con seguridad.
+Se podría cubrir la mayor parte de la auditoría manual copiando el país del viaje
+inmediatamente anterior. Se descarta: el período es una declaración de que no sabemos dónde
+estaba el usuario, y completarlo con el país del viaje anterior afirma algo que ninguna
+coordenada de ese período respalda. Si el usuario estuvo en un país y se mudó a otro a mitad
+de período, el archivo pasa a mentir con seguridad.
 
-La línea de tiempo muestra por qué el caso real es más interesante que "no sabemos dónde":
-
-```
-   mes      total  conGPS   %gps
-   2026-06      4       4   100%
-   2026-07     30      19    63%   <- la senal se cae
-   2026-08     20       0     0%
-   2026-09    869       0     0%   <- el mes mas grande de la coleccion
-```
-
-El GPS dejó de escribirse el 2026-07-11 y no volvió. Eso es un incidente del dispositivo,
-no 15 lugares desconocidos, y por eso el paquete de trabajo de este cambio es el país de
-los viajes, no la auditoría. Detectar el incidente es un cambio aparte.
+La señal de GPS en una colección puede ser intermitente, y hay meses enteros sin posición.
+Eso es un incidente del dispositivo o un problema del recorrido, no una lista de lugares
+desconocidos, y por eso el paquete de trabajo de este cambio es el país de los viajes y no
+la auditoría. Detectar ese incidente, si hace falta, es un cambio aparte.
 
 ### 7. La ciudad queda fuera, y no por el tamaño del gazetteer
 
@@ -219,7 +207,7 @@ Clasificación y agregado, sobre la lista de fotos que ya existe en memoria:
   scan(carpeta)
         |
         v
-  ScanResult.photos  (3731 con posicion)
+  ScanResult.photos  (las que tienen posicion)
         |
         |  +---> load_countries()            una vez por proceso
         |         |  lee data/countries.geojson
@@ -274,9 +262,9 @@ Consulta de país, sobre el índice en memoria:
 ## Riesgos / Trade-offs
 
 - **Un polígono simplificado pone una frontera en el lado equivocado** → se verifica la
-  clasificación contra los casos de la colección real, en particular el cruce
-  Ciudad del Este / Foz do Iguaçu, que es el que ya sabemos que ocurre. La verificación
-  va antes de fijar el conjunto de datos.
+  clasificación contra casos de referencia de frontera, que están en los tests y no
+  dependen de ninguna colección real. La verificación va antes de fijar el conjunto de
+  datos.
 
 - **El tamaño del conjunto de polígonos encarece la instalación** → se elige la fuente más
   simple que resuelva el caso, y el tamaño se mide y se declara en el README antes de
@@ -310,8 +298,8 @@ Consulta de país, sobre el índice en memoria:
    verificar que la instalación del paquete lo incluye.
 2. Implementar la carga del conjunto y el índice en memoria, con la consulta de país, y
    probarla por separado del agrupado.
-3. Medir el costo de clasificar las 3731 coordenadas de la colección real y verificar el
-   cruce de frontera de Ciudad del Este / Foz do Iguaçu.
+3. Medir el costo de clasificar una colección de fotos de prueba y verificar el cruce de
+   frontera con las coordenadas de referencia de los tests.
 4. Clasificar por foto dentro de `build_suggestions` y acumular el conteo por país.
 5. Agregar el objeto `location` a `TripSuggestion`, subir `SUGGESTIONS_VERSION` a 2 y
    resolverlo con `data.get()` en `from_dict`.
