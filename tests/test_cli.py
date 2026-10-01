@@ -148,10 +148,13 @@ def test_default_index_path_is_used_when_not_given(
     library = build_library(tmp_path)
     state = tmp_path / "estado"
     monkeypatch.setenv("LOCALAPPDATA", str(state))
+    monkeypatch.setenv("XDG_STATE_HOME", str(state))
 
     main(["scan", str(library)])
     out = capsys.readouterr().out
 
+    # El codigo usa LOCALAPPDATA en win32 y XDG_STATE_HOME en POSIX; ambos
+    # apuntan a "state" arriba, asi que la ruta esperada es la misma.
     index_path = state / "fotos-plus" / "indexes"
     assert index_path.is_dir()
     written = list(index_path.glob("*.json"))

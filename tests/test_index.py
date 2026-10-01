@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+
+import pytest
 
 from fotos_plus.index import (
     default_index_path,
@@ -109,6 +112,11 @@ def test_default_index_path_is_stable_per_folder(tmp_path: Path) -> None:
     assert first.parent.name == "indexes"
 
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="os.path.normcase es identidad fuera de win32, asi que 'Fotos' y "
+    "'fotos' son carpetas distintas en POSIX",
+)
 def test_default_index_path_follows_case_insensitive_paths(tmp_path: Path) -> None:
     lower = default_index_path(tmp_path / "Fotos")
     upper = default_index_path(tmp_path / "fotos")
