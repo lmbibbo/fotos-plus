@@ -12,11 +12,13 @@ from .index import edicion_path_next_to, suggestions_path_next_to
 from .labels import (
     LabelError,
     LabelOverlay,
+    clear_tag,
     derived_title,
     read_edicion,
     remove_label,
     resolve_labels,
     set_label,
+    set_tag,
     write_edicion,
 )
 from .index import read_index, read_suggestions
@@ -138,6 +140,7 @@ class _LabelHandler(http.server.BaseHTTPRequestHandler):
         action = data.get("action") or "set"
         key = data.get("key", data.get("first_captured_at"))
         text = data.get("text", data.get("label"))
+        tag = data.get("tag")
 
         try:
             overlay = server.overlay
@@ -147,6 +150,10 @@ class _LabelHandler(http.server.BaseHTTPRequestHandler):
                 updated = set_label(
                     overlay, server.suggestions, key, text, server.scanned_at
                 )
+            elif action == "set_tag":
+                updated = set_tag(overlay, server.suggestions, key, tag, server.scanned_at)
+            elif action == "clear_tag":
+                updated = clear_tag(overlay, key)
             else:
                 self._send_json(400, {"error": "accion desconocida"})
                 return
@@ -196,15 +203,21 @@ class _LabelServer(http.server.HTTPServer):
             return self._page_cache
 
         result = read_index(self.index_path)
-        groups = assign_groups(result.photos, self.suggestions, labels=self.overlay.labels)
         resolution = resolve_labels(self.overlay, self.suggestions)
+        groups = assign_groups(
+            result.photos,
+            self.suggestions,
+            labels=resolution.labels,
+            tags=resolution.tags,
+        )
         html = render_html(
             groups,
             result.root,
             flat=False,
-            labels=self.overlay.labels,
+            labels=resolution.labels,
             token=self.token,
             drift=resolution,
+            tag_options=self.overlay.tags,
         )
         self._page_cache = html.encode("utf-8")
         return self._page_cache

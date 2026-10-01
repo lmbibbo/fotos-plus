@@ -196,3 +196,47 @@ def test_scan_without_progress_callback_still_works(tmp_path: Path) -> None:
     make_image(tmp_path / "una.jpg", color="red")
 
     assert [photo.name for photo in scan(tmp_path).photos] == ["una.jpg"]
+
+
+# --- El escaneo no toca el archivo de edicion ------------------------------------
+
+
+def test_a_rescan_leaves_the_edition_file_untouched(tmp_path: Path) -> None:
+    from fotos_plus.labels import LabelOverlay, read_edicion, write_edicion
+
+    root = tmp_path / "fotos"
+    root.mkdir()
+    make_image(root / "una.jpg", color="red")
+    edicion = tmp_path / "indice-edicion.json"
+    write_edicion(
+        LabelOverlay(
+            labels={"2024-05-01T00:00:00": "Viaje a Bariloche"},
+            tags=["Familia"],
+            tagged={"2024-05-01T00:00:00": "Familia"},
+        ),
+        edicion,
+    )
+    antes = edicion.read_bytes()
+
+    scan(root)
+
+    # el escaneo ni lee ni reescribe la edicion: los nombres y los tags siguen
+    assert edicion.read_bytes() == antes
+    overlay = read_edicion(edicion)
+    assert overlay.labels == {"2024-05-01T00:00:00": "Viaje a Bariloche"}
+    assert overlay.tags == ["Familia"]
+    assert overlay.tagged == {"2024-05-01T00:00:00": "Familia"}
+
+
+def test_scan_writes_only_its_own_files(tmp_path: Path) -> None:
+    from fotos_plus.index import write_index
+
+    root = tmp_path / "fotos"
+    root.mkdir()
+    make_image(root / "una.jpg", color="red")
+
+    result = scan(root)
+    write_index(result, tmp_path / "indice.json")
+
+    nombres = sorted(p.name for p in tmp_path.iterdir())
+    assert nombres == ["fotos", "indice.json"]

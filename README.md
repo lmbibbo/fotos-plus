@@ -112,8 +112,9 @@ El servidor:
 - Escribe el mismo HTML de antes, junto al índice, y **no lo modifica**: ese archivo sigue
   siendo de solo lectura.
 - Escucha únicamente en `127.0.0.1`. No es alcanzable desde la red.
-- Levanta una copia de la página en memoria con los controles de edición. Al guardar, el
-  título de la tarjeta se actualiza sin recargar.
+- Levanta una copia de la página en memoria con los controles de edición. Al guardar un
+  título, el de la tarjeta se actualiza sin recargar. Al cambiar un tag la página **se
+  recarga**, porque las secciones se reordenan.
 - Muestra la dirección al arrancar. Ctrl+C lo cierra y libera el puerto.
 
 El token de sesión se genera en cada arranque y viaja en la página servida: sin él, el
@@ -126,10 +127,14 @@ En un archivo hermano del índice, `<indice>-edicion.json`:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "based_on_scanned_at": "2026-01-01T00:00:00",
   "labels": {
     "2024-05-01T00:00:00": "Viaje a Bariloche"
+  },
+  "tags": ["Viaje", "Familia"],
+  "tagged": {
+    "2024-05-01T00:00:00": "Familia"
   }
 }
 ```
@@ -145,6 +150,34 @@ Reglas:
 - Si la referencia no corresponde a ningún grupo del escaneo vigente, el servidor lo dice y
   **no escribe nada**. El archivo de etiquetas no se toca.
 
+Un archivo `version: 1` de antes todavía se lee: la primera modificación lo reescribe como
+`version: 2` conservando los nombres que tuviera.
+
+#### Tags: agrupar a mano
+
+El escaneo agrupa por parecido de fecha yno sabe qué fue un viaje y qué fue una tarde en casa.
+Para eso está el **tag**: un nombre corto y libre que escribes vos, que decide cómo se ordena
+la página.
+
+- Cada tarjeta tiene **un solo tag**, distinto del título. Un grupo puede tener título "Viaje a
+  Bariloche" y tag "Familia" al mismo tiempo.
+- Los nombres del tag salen de vos: escribís uno nuevo en el selector y queda en el catálogo
+  para reutilizarlo. El catálogo no se borra cuando un tag queda sin tarjetas.
+- Un tag se compara **sin distinguir mayúsculas ni espacios**, así que `Familia`, `familia` y
+  `  Familia  ` son el mismo tag. Se guarda la forma en que lo escribiste la primera vez.
+
+Cómo se agrupa la página:
+
+- Las tarjetas con el mismo tag van en una sección, y las secciones se ordenan por la fecha de
+  su primera tarjeta. `Sin tag` va siempre al final.
+- **Arrastrá** una tarjeta a otra sección y adopta su tag. Soltala sobre `Sin tag` para quitarle
+  el tag. Soltarla sobre otra tarjeta le toma el tag de esa tarjeta.
+- El HTML exportado con `view` (sin `--serve`) muestra las mismas secciones, pero sin selector
+  ni arrastre: no hay servidor donde guardar.
+
+Los tags no cambian los rangos de fechas ni a qué fotos pertenece cada grupo. Solo ordenan lo
+que ya estaba agrupado.
+
 Quién escribe cada archivo, para que no se pisen:
 
 | Archivo | Lo escribe |
@@ -154,9 +187,9 @@ Quién escribe cada archivo, para que no se pisen:
 | `<indice>-edicion.json` | solo el servidor de edición |
 | `<indice>.html` | solo `view` |
 
-Un `scan` posterior **no borra** las etiquetas: como `first_captured_at` es la fecha de la
-primera foto del grupo, sigue resolviendo al mismo grupo. Si el escaneo se rehizo después de
-escribir los nombres, la página avisa de que puede haber deriva.
+Un `scan` posterior **no borra** las etiquetas ni los tags: como `first_captured_at` es la fecha
+de la primera foto del grupo, sigue resolviendo al mismo grupo. Si el escaneo se rehizo después de
+escribir los nombres o los tags, la página avisa de que puede haber deriva.
 
 ### Lanzador para Windows
 

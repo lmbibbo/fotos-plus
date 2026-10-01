@@ -5,7 +5,7 @@ import html
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, Sequence, TYPE_CHECKING
 
 from .index import (
     edicion_path_next_to,
@@ -36,6 +36,9 @@ class Group:
     `key` es la referencia con la que el usuario puede etiquetar el grupo, y es
     `None` en los grupos que el escaneo no declaro (sin clasificar y grilla plana):
     esos no son un grupo sugerido y no se pueden etiquetar.
+
+    `tag` es el tag que el usuario le asigno. No cambia el contenido de la tarjeta ni su
+    rango de fechas: solo decide en que seccion aparece.
     """
 
     title: str
@@ -46,6 +49,62 @@ class Group:
     country: Optional[str] = None
     photos: list[Photo] = field(default_factory=list)
     key: Optional[str] = None
+    tag: Optional[str] = None
+
+
+UNTAGGED_SECTION_TITLE = "Sin tag"
+TAG_CATALOG_ID = "tag-catalog"
+
+
+@dataclass
+class Section:
+    """Un conjunto de tarjetas que comparten tag, y el encabezado que las agrupa."""
+
+    tag: Optional[str]
+    title: str
+    groups: list[Group]
+
+    @property
+    def count(self) -> int:
+        return len(self.groups)
+
+
+def _section_date(section: Section) -> str:
+    """La fecha mas temprana de la seccion, que es la que le da el orden."""
+    return min(group.first_captured_at or "" for group in section.groups)
+
+
+def group_sections(groups: list[Group]) -> list[Section]:
+    """Reparte las tarjetas en secciones, una por tag, y devuelve la lista de secciones.
+
+    Devuelve una lista vacia cuando ningun grupo tiene tag: en ese caso el visor sigue
+    mostrando las tarjetas en una unica lista ordenada por fecha, como antes de que
+    existieran los tags. Un tag del catalogo sin ningun grupo asignado no produce seccion,
+    porque las secciones se arman desde los grupos que hay, no desde el catalogo.
+
+    Las secciones con tag van ordenadas por la fecha mas temprana de su primer grupo, y
+    la de los grupos sin tag va al final.
+    """
+    if not any(group.tag for group in groups):
+        return []
+
+    buckets: dict[Optional[str], list[Group]] = {}
+    for group in groups:
+        buckets.setdefault(group.tag, []).append(group)
+
+    sections = [
+        Section(tag=tag, title=tag or UNTAGGED_SECTION_TITLE, groups=buckets[tag])
+        for tag in buckets
+        if tag is not None
+    ]
+    sections.sort(key=_section_date)
+
+    untagged = buckets.get(None)
+    if untagged:
+        sections.append(
+            Section(tag=None, title=UNTAGGED_SECTION_TITLE, groups=untagged)
+        )
+    return sections
 
 
 def labelled_title(derived: str, key: Optional[str], labels: dict[str, str]) -> str:
@@ -61,7 +120,9 @@ def labelled_title(derived: str, key: Optional[str], labels: dict[str, str]) -> 
     return derived
 
 
-def _group_from_trip(trip, photos: list[Photo], labels: dict[str, str]) -> Group:
+def _group_from_trip(
+    trip, photos: list[Photo], labels: dict[str, str], tags: dict[str, str]
+) -> Group:
     location = trip.location
     country = location.country if location is not None else None
     return Group(
@@ -73,10 +134,13 @@ def _group_from_trip(trip, photos: list[Photo], labels: dict[str, str]) -> Group
         country=country,
         photos=photos,
         key=trip.first_captured_at,
+        tag=tags.get(trip.first_captured_at),
     )
 
 
-def _group_from_period(period, photos: list[Photo], labels: dict[str, str]) -> Group:
+def _group_from_period(
+    period, photos: list[Photo], labels: dict[str, str], tags: dict[str, str]
+) -> Group:
     # Los periodos no declaran pais por diseno: no hay nada que clasificar.
     return Group(
         title=labelled_title("Periodo", period.first_captured_at, labels),
@@ -86,6 +150,7 @@ def _group_from_period(period, photos: list[Photo], labels: dict[str, str]) -> G
         last_captured_at=period.last_captured_at,
         photos=photos,
         key=period.first_captured_at,
+        tag=tags.get(period.first_captured_at),
     )
 
 
@@ -97,6 +162,7 @@ def assign_groups(
     photos: list[Photo],
     suggestions: SuggestionsResult,
     labels: Optional[dict[str, str]] = None,
+    tags: Optional[dict[str, str]] = None,
 ) -> list[Group]:
     """Cruza el indice de fotos con las sugerencias y devuelve los grupos.
 
@@ -109,10 +175,13 @@ def assign_groups(
     hay huerfanas. Un periodo contenido dentro de un viaje se queda sin fotos propias
     porque estas van al viaje, pero el grupo sigue en la lista para que no desaparezca.
 
-    `labels` son las etiquetas del usuario, indexadas por la fecha mas temprana del
-    grupo: solo cambian el titulo de la tarjeta, no su contenido ni su orden.
+    `labels` son las etiquetas del usuario y `tags` sus tags, ambos indexados por la
+    fecha mas temprana del grupo. Las etiquetas cambian el titulo de la tarjeta y los
+    tags la seccion en la que aparece: ninguno de los dos toca el contenido de la
+    tarjeta ni el orden en que se agrupan las fotos.
     """
     labels = labels or {}
+    tags = tags or {}
     ordered = sorted(photos, key=_photo_sort_key)
 
     trips = sorted(suggestions.trips, key=lambda t: t.first_captured_at)
@@ -151,9 +220,9 @@ def assign_groups(
     groups: list[Group] = []
     for (kind, index), bucket in buckets.items():
         if kind == "trip":
-            groups.append(_group_from_trip(trips[index], bucket, labels))
+            groups.append(_group_from_trip(trips[index], bucket, labels, tags))
         else:
-            groups.append(_group_from_period(periods[index], bucket, labels))
+            groups.append(_group_from_period(periods[index], bucket, labels, tags))
 
     if orphans:
         first = min(
@@ -205,8 +274,10 @@ def _photo_card(b64: str, alt: str) -> str:
     )
 
 
-def _label_editor(group: Group, labels: dict[str, str], token: str) -> str:
-    """Controles para cambiar la etiqueta de una tarjeta.
+def _label_editor(
+    group: Group, labels: dict[str, str], token: str, tag_options: Sequence[str] = ()
+) -> str:
+    """Controles para cambiar la etiqueta y el tag de una tarjeta.
 
     Solo aparece en la pagina servida. Quitar la etiqueta es una accion aparte y no
     se llega borrando el texto: el campo vacio no se puede enviar.
@@ -219,21 +290,73 @@ def _label_editor(group: Group, labels: dict[str, str], token: str) -> str:
         if current
         else ""
     )
+    tag_control = _tag_editor(group, token, tag_options)
     return (
         '<form class="label-form"'
         f' data-key="{html.escape(group.key)}"'
         f' data-token="{html.escape(token)}">'
         f'<input class="label-input" type="text" value="{html.escape(current)}"'
         ' placeholder="Nombre del grupo" maxlength="120">'
-        f'<button type="submit" class="label-save">Guardar</button>'
+        f'<button type="submit" class="label-save">Guardar etiqueta</button>'
         f"{remove}"
+        f"{tag_control}"
         '<p class="label-error" hidden></p>'
         "</form>"
     )
 
 
+def _tag_editor(
+    group: Group, token: str, tag_options: Sequence[str] = ()
+) -> str:
+    """Selector de tag, con opcion de escribir uno nuevo y de quitar el actual.
+
+    El `datalist` es uno solo en todo el documento, asi que no se emite aca: el input
+    apunta a el por id. Un tag vigente que ya no esta en el catalogo se agrega igual a
+    `tag_options`, para que un tag al que ya no se le asigno ningun grupo siga pudiendo
+    elegirse.
+    """
+    if group.key is None:
+        return ""
+    current = group.tag or ""
+    remove = (
+        f'<button type="button" class="tag-remove">Quitar tag</button>' if current else ""
+    )
+    return (
+        '<div class="tag-controls"'
+        f' data-key="{html.escape(group.key)}"'
+        f' data-token="{html.escape(token)}">'
+        f'<input class="tag-input" type="text" list="{TAG_CATALOG_ID}"'
+        f' value="{html.escape(current)}"'
+        ' placeholder="Tag" maxlength="60">'
+        f'<button type="button" class="tag-save">Guardar tag</button>'
+        f"{remove}"
+        '<p class="tag-error" hidden></p>'
+        "</div>"
+    )
+
+
+def _tag_catalog(tag_options: Sequence[str], groups: Sequence[Group]) -> str:
+    """El `datalist` unico con los nombres que el selector ofrece.
+
+    Reune el catalogo y los tags que tienen alguna tarjeta, para que ninguno de los dos
+    quede fuera por el hecho de que el otro no lo liste.
+    """
+    vigente = [group.tag for group in groups if group.tag]
+    names = list(dict.fromkeys([*tag_options, *vigente]))
+    if not names:
+        return ""
+    options = "".join(
+        f'<option value="{html.escape(name)}"></option>' for name in names
+    )
+    return f'<datalist id="{TAG_CATALOG_ID}">{options}</datalist>'
+
+
 def _group_card(
-    group: Group, root: Path, labels: dict[str, str], token: Optional[str] = None
+    group: Group,
+    root: Path,
+    labels: dict[str, str],
+    token: Optional[str] = None,
+    tag_options: Sequence[str] = (),
 ) -> str:
     # Se muestra la cantidad de fotos que tiene el grupo de verdad, no el `photo_count`
     # de la sugerencia: ese numero cuenta solo las fotos con posicion, asi que queda
@@ -256,15 +379,47 @@ def _group_card(
         # Grupo declarado que se quedo sin fotos, normalmente porque cae dentro de
         # un viaje. Se avisa para que no parezca que falta el grupo.
         thumbs = '<p class="vacio">Sin fotos propias: caen en otro grupo.</p>'
-    editor = _label_editor(group, labels, token) if token is not None else ""
+    editor = (
+        _label_editor(group, labels, token, tag_options) if token is not None else ""
+    )
     key_attribute = f' data-key="{html.escape(group.key)}"' if group.key else ""
+    # El tag viaja en la tarjeta para que el arrastre pueda leer el destino sin
+    # preguntar al servidor. Vacio significa que el grupo no tiene tag.
+    tag_attribute = f' data-tag="{html.escape(group.tag)}"' if group.tag else ' data-tag=""'
     return (
-        f'<article class="card"{key_attribute}>'
+        f'<article class="card"{key_attribute}{tag_attribute}>'
         f'<h2>{html.escape(group.title)}</h2>'
         f'<p class="meta">{html.escape(" · ".join(meta))}</p>'
         f"{editor}"
         f'<div class="thumbs">{thumbs}</div>'
         "</article>"
+    )
+
+
+def _section_html(
+    section: Section,
+    root: Path,
+    labels: dict[str, str],
+    token: Optional[str] = None,
+    tag_options: Sequence[str] = (),
+) -> str:
+    """Una seccion de tarjetas que comparten tag.
+
+    El encabezado es tambien zona de destino: soltar una tarjeta ahi le asigna el tag de
+    la seccion. La de "Sin tag" lleva el atributo vacio, que es lo que hace que soltar
+    ahi le quite el tag en lugar de asignarle una cadena vacia.
+    """
+    drop = html.escape(section.tag or "")
+    cards = "".join(
+        _group_card(group, root, labels, token, tag_options) for group in section.groups
+    )
+    plural = "grupo" if section.count == 1 else "grupos"
+    return (
+        f'<section class="tag-section" data-drop="{drop}">'
+        f'<h2 class="tag-section-title">{html.escape(section.title)}'
+        f'<span class="tag-section-count">{section.count} {plural}</span></h2>'
+        f'<div class="grid">{cards}</div>'
+        "</section>"
     )
 
 
@@ -311,6 +466,22 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .label-remove { border-color: #5a3a3a; color: #e0b4b4; }
 .label-error { flex: 1 0 100%; color: #e0b4b4; font-size: 12px; margin: 2px 0 0; }
 .aviso { color: #d8c69a; font-size: 13px; margin: 0 0 12px; }
+.tag-section { margin: 0 0 28px; border-radius: 10px; }
+.tag-section-title { font-size: 14px; margin: 0 0 10px; color: #c8ccd2;
+                     display: flex; align-items: baseline; gap: 8px; }
+.tag-section-count { font-size: 12px; color: #9aa0a6; font-weight: normal; }
+.tag-controls { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; }
+.tag-input { flex: 1 1 110px; min-width: 0; font: inherit; font-size: 12px;
+             padding: 5px 8px; border-radius: 6px; border: 1px solid #3c4149;
+             background: #14161a; color: #e8eaed; }
+.tag-save, .tag-remove { font: inherit; font-size: 12px; cursor: pointer;
+                         padding: 5px 10px; border-radius: 6px;
+                         border: 1px solid #3c4149; background: #2c3036;
+                         color: #e8eaed; }
+.tag-remove { border-color: #5a3a3a; color: #e0b4b4; }
+.tag-error { flex: 1 0 100%; color: #e0b4b4; font-size: 12px; margin: 2px 0 0; }
+.card[draggable="true"] { cursor: grab; }
+.card.destino, .tag-section.destino { outline: 2px dashed #6f8fbf; outline-offset: 3px; }
 """
 
 # Se inyecta solo en la pagina servida. El export estatico no lo lleva: sin servidor
@@ -401,23 +572,191 @@ EDIT_SCRIPT = """
       });
     }
   });
+
+  // --- Tags: selector y arrastre ---
+  //
+  // Un solo manejador cubre los tres gestos: soltar sobre una seccion, sobre una
+  // tarjeta o sobre "Sin tag". Todos se resuelven leyendo el `data-tag` del destino,
+  // y un destino sin tag produce `clear_tag` en lugar de una asignacion vacia.
+
+  function mostrarErrorTag(control, mensaje) {
+    var box = control.querySelector(".tag-error");
+    if (!box) { return; }
+    box.textContent = mensaje;
+    box.hidden = !mensaje;
+  }
+
+  function postTag(control, body) {
+    var boton = control.querySelector(".tag-save");
+    if (boton) { boton.disabled = true; }
+    return fetch("/api/labels", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Fotos-Plus-Token": control.getAttribute("data-token")
+      },
+      body: JSON.stringify(body)
+    }).then(function (respuesta) {
+      return respuesta.json().then(function (resultado) {
+        return { ok: respuesta.ok, datos: resultado };
+      });
+    }).then(function (resultado) {
+      if (!resultado.ok) {
+        throw new Error(resultado.datos.error || "No se pudo guardar el tag");
+      }
+      // La seccion reordena las tarjetas, asi que se vuelve a pedir la pagina
+      // completa en lugar de mover nodos a mano.
+      window.location.reload();
+    });
+  }
+
+  document.querySelectorAll(".tag-controls").forEach(function (control) {
+    var card = control.closest(".card");
+    var campo = control.querySelector(".tag-input");
+    var boton = control.querySelector(".tag-save");
+    var quitar = control.querySelector(".tag-remove");
+    var key = control.getAttribute("data-key");
+    var token = control.getAttribute("data-token");
+
+    function guardar() {
+      var texto = campo.value.trim();
+      // Un tag vacio no se envia: quitarlo es una accion aparte.
+      if (!texto) {
+        mostrarErrorTag(control, "Un tag no puede estar vacio");
+        return;
+      }
+      mostrarErrorTag(control, "");
+      postTag(control, { action: "set_tag", key: key, tag: texto, token: token })
+        .catch(function (error) {
+          mostrarErrorTag(control, error.message);
+          if (boton) { boton.disabled = false; }
+        });
+    }
+
+    if (boton) { boton.addEventListener("click", guardar); }
+
+    if (quitar) {
+      quitar.addEventListener("click", function () {
+        mostrarErrorTag(control, "");
+        postTag(control, { action: "clear_tag", key: key, token: token })
+          .catch(function (error) {
+            mostrarErrorTag(control, error.message);
+          });
+      });
+    }
+  });
+
+  var arrastrando = null;
+
+  // Resalta el destino mientras la tarjeta esta encima: sin esto no se ve donde va a
+  // caer. Se limpia en dragend, que es el unico evento que fires siempre.
+  function marcarDestino(elemento) {
+    if (elemento) { elemento.classList.add("destino"); }
+  }
+
+  function limpiarDestinos() {
+    document.querySelectorAll(".destino").forEach(function (elemento) {
+      elemento.classList.remove("destino");
+    });
+  }
+
+  document.querySelectorAll(".card").forEach(function (card) {
+    card.setAttribute("draggable", "true");
+
+    card.addEventListener("dragstart", function (evento) {
+      arrastrando = card;
+      evento.dataTransfer.effectAllowed = "move";
+      // Firefox exige que haya datos para iniciar el arrastre.
+      evento.dataTransfer.setData("text/plain", card.getAttribute("data-key") || "");
+    });
+
+    card.addEventListener("dragend", function () {
+      arrastrando = null;
+      limpiarDestinos();
+    });
+
+    card.addEventListener("dragover", function (evento) {
+      evento.preventDefault();
+      evento.dataTransfer.dropEffect = "move";
+      limpiarDestinos();
+      marcarDestino(card);
+    });
+
+    card.addEventListener("dragleave", function () {
+      card.classList.remove("destino");
+    });
+
+    card.addEventListener("drop", function (evento) {
+      evento.preventDefault();
+      evento.stopPropagation();
+      var origen = arrastrando;
+      arrastrando = null;
+      limpiarDestinos();
+      if (!origen || origen === card) { return; }
+      soltar(origen, card.getAttribute("data-tag") || "");
+    });
+  });
+
+  document.querySelectorAll(".tag-section").forEach(function (seccion) {
+    seccion.addEventListener("dragover", function (evento) {
+      evento.preventDefault();
+      evento.dataTransfer.dropEffect = "move";
+      limpiarDestinos();
+      marcarDestino(seccion);
+    });
+
+    seccion.addEventListener("dragleave", function () {
+      seccion.classList.remove("destino");
+    });
+
+    seccion.addEventListener("drop", function (evento) {
+      evento.preventDefault();
+      var origen = arrastrando;
+      arrastrando = null;
+      limpiarDestinos();
+      if (!origen) { return; }
+      soltar(origen, seccion.getAttribute("data-drop") || "");
+    });
+  });
+
+  function soltar(origen, tagDestino) {
+    var control = origen.querySelector(".tag-controls");
+    if (!control) { return; }
+    var cuerpo = {
+      key: origen.getAttribute("data-key"),
+      token: control.getAttribute("data-token")
+    };
+    if (tagDestino) {
+      cuerpo.action = "set_tag";
+      cuerpo.tag = tagDestino;
+    } else {
+      cuerpo.action = "clear_tag";
+    }
+    postTag(control, cuerpo).catch(function (error) {
+      // La tarjeta conserva el tag que tenia: no se toca el DOM hasta que el
+      // servidor confirma.
+      mostrarErrorTag(control, error.message);
+    });
+  }
 })();
 </script>
 """
 
 
 def _drift_notice(drift: Optional["LabelResolution"]) -> str:
-    """Aviso de que el escaneo se movio y algunas etiquetas quedaron sin grupo."""
+    """Aviso de que el escaneo se movio y algunas ediciones quedaron sin grupo."""
     if drift is None or not drift.drifted:
         return ""
     parts: list[str] = []
     if drift.scan_advanced:
-        parts.append("El escaneo se rehizo despues de escribir las etiquetas.")
+        parts.append("El escaneo se rehizo despues de escribir los nombres y tags.")
     if drift.dangling_count:
-        total = drift.resolved_count + drift.dangling_count
+        # El total mezcla nombres y tags: los dos se guardan contra la misma lista de
+        # grupos y se avisan juntos, asi que el texto no dice solo "etiquetas".
+        total = drift.resolved_count + drift.tagged_count + drift.dangling_count
         parts.append(
-            f"{drift.dangling_count} de {total} etiquetas ya no corresponden a "
-            "ningun grupo. Siguen guardadas."
+            f"{drift.dangling_count} de {total} nombres y tags ya no corresponden a "
+            "ningun grupo. Siguen guardados."
         )
     return f'<p class="aviso">{" ".join(parts)}</p>'
 
@@ -429,29 +768,44 @@ def render_html(
     labels: Optional[dict[str, str]] = None,
     token: Optional[str] = None,
     drift: Optional["LabelResolution"] = None,
+    tag_options: Sequence[str] = (),
 ) -> str:
     """Genera el documento del visor.
 
-    Sin `token` el documento es de solo lectura: muestra las etiquetas vigentes pero no
-    ofrece ningun control para cambiarlas, porque sin servidor no habria donde
-    guardarlas. Con `token` la pagina viene con los controles de edicion.
+    Sin `token` el documento es de solo lectura: muestra las etiquetas y los tags
+    vigentes pero no ofrece ningun control para cambiarlos, porque sin servidor no habria
+    donde guardarlos. Con `token` la pagina viene con los controles de edicion.
+
+    `tag_options` son los nombres del catalogo que el selector de tag ofrece.
     """
     labels = labels or {}
     editable = token is not None
 
     if flat:
-        body = "".join(
+        cards = "".join(
             _flat_card(photo, Path(root))
             for photo in sorted(
                 (p for g in groups for p in g.photos), key=_photo_sort_key
             )
         )
+        body = f'<div class="grid">{cards}</div>'
         title = FLAT_GRID_TITLE
         subtitle = "sin archivo de sugerencias: se muestran todas las fotos sin agrupar"
     else:
-        body = "".join(
-            _group_card(group, Path(root), labels, token) for group in groups
-        )
+        # Con tags asignados las tarjetas van en secciones; sin tags, en una sola
+        # grilla ordenada por fecha, que es como se veia antes de que existieran.
+        sections = group_sections(groups)
+        if sections:
+            body = "".join(
+                _section_html(section, Path(root), labels, token, tag_options)
+                for section in sections
+            )
+        else:
+            cards = "".join(
+                _group_card(group, Path(root), labels, token, tag_options)
+                for group in groups
+            )
+            body = f'<div class="grid">{cards}</div>'
         title = "Viajes y periodos sugeridos"
         subtitle = "sugerencias sin confirmar: no son definitivas"
 
@@ -465,6 +819,9 @@ def render_html(
         # mirando el atributo del body: sin servidor no se puede cambiar nada.
         notices = f"{subtitle} · solo lectura: para cambiar los nombres, usa view --serve"
     script = EDIT_SCRIPT if editable else ""
+    # El catalogo de tags solo aparece en la pagina servida: sin servidor no hay a quien
+    # elegirle un tag.
+    catalog = _tag_catalog(tag_options, groups) if editable else ""
 
     return (
         "<!doctype html>\n"
@@ -479,7 +836,8 @@ def render_html(
         f"<h1>{html.escape(title)}</h1>\n"
         f'<p class="notice">{html.escape(notices)}</p>\n'
         f"{_drift_notice(drift)}"
-        f'<div class="grid">{body}</div>\n'
+        f"{body}\n"
+        f"{catalog}"
         '<script type="application/json" id="viewer-data">'
         f"{json.dumps(_payload(groups, root, flat), ensure_ascii=False)}"
         "</script>\n"
@@ -534,7 +892,9 @@ def build_view(index_path: Path) -> tuple[str, bool]:
     overlay = read_edicion(edicion_path_next_to(index_path))
     resolution = resolve_labels(overlay, suggestions)
 
-    groups = assign_groups(result.photos, suggestions, labels=resolution.labels)
+    groups = assign_groups(
+        result.photos, suggestions, labels=resolution.labels, tags=resolution.tags
+    )
     return (
         render_html(
             groups,
@@ -543,6 +903,7 @@ def build_view(index_path: Path) -> tuple[str, bool]:
             labels=resolution.labels,
             token=None,
             drift=resolution,
+            tag_options=overlay.tags,
         ),
         False,
     )
