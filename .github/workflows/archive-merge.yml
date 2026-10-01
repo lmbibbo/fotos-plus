@@ -32,7 +32,11 @@ jobs:
           node-version: 22
 
       - name: Validar specs y changes
-        run: npx --yes openspec validate --all --strict
+        # El paquete de npm "openspec" esta vacio (0.0.0, sin bin). El
+        # proyecto real es @fission-ai/openspec, que expone el binario
+        # `openspec`. Usar el nombre corto falla con "could not determine
+        # executable to run".
+        run: npx --yes @fission-ai/openspec@1.14.0 validate --all --strict
 
   merge:
     name: merge
