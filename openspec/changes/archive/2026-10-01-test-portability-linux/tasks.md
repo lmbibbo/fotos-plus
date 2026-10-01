@@ -19,14 +19,18 @@
 - [x] 3.1 Ejecutar la suite completa en Windows: `python -m pytest -q`
       Verificar: `260 passed, 1 skipped` (el conteo no debe cambiar respecto al estado previo, porque en Windows los dos tests ya pasaban)
       Resultado: `260 passed, 1 skipped in 43.42s`. Conteo identico al previo; los dos tests siguen ejecutandose en Windows.
-- [ ] 3.2 Commitar en `feature/test-portability-linux` y abrir PR a `main` **sin** la etiqueta `archive`, para que `verify` corra y confirme que la suite pasa en Linux
+- [x] 3.2 Commitar en `feature/test-portability-linux` y abrir PR a `main` **sin** la etiqueta `archive`, para que `verify` corra y confirme que la suite pasa en Linux
       Verificar: el PR queda abierto y GitHub muestra el check `verify` en verde
-- [ ] 3.3 Confirmado el `verify` en verde, aplicar la etiqueta `archive` al PR para que el workflow lo mergee con squash y borre la rama
+      Resultado: PR #6. La suite paso en Linux. Hubo que corregir un bug del workflow: `npx openspec` resuelve al paquete vacio de npm (0.0.0, sin bin); el real es `@fission-ai/openspec`, fijado a 1.14.0.
+- [x] 3.3 Confirmado el `verify` en verde, aplicar la etiqueta `archive` al PR para que el workflow lo mergee con squash y borre la rama
       Verificar: el PR figura MERGED, la rama remota `feature/test-portability-linux` ya no existe, y el commit aparece en `main`
+      Resultado: MERGED por el job `merge` (run 36916943954, `verify` y `merge` ambos success). Commit squash `8856c4f` en `main`; la rama remota ya no esta en `origin`.
 
 ## 4. Cierre del ciclo de CI
 
-- [ ] 4.1 Volver al change archivado `2026-10-01-add-archive-pr-automation` y cerrar la task 3.2 activando branch protection en `main` con el check `verify` como required status check
+- [x] 4.1 Volver al change archivado `2026-10-01-add-archive-pr-automation` y cerrar la task 3.2 activando branch protection en `main` con el check `verify` como required status check
       Verificar: `gh api repos/lmbibbo/fotos-plus/branches/main/protection --jq '.required_status_checks.contexts'` incluye `"verify"`
-- [ ] 4.2 Cerrar la task 5.1 reutilizando el PR #5 (`test/archive-merge-smoke`) o creanduno nuevo, segun el estado del PR #5 al momento de ejecutar
+      Resultado: proteccion activa con `checks: verify`, `strict: true`, `force_push: false`, `deletion: false`, `enforce_admins: true`, sin revision previa exigida. La API exige enviar `required_pull_request_reviews` y `restrictions` explicitos (null) o responde 422.
+- [x] 4.2 Cerrar la task 5.1 reutilizando el PR #5 (`test/archive-merge-smoke`) o creanduno nuevo, segun el estado del PR #5 al momento de ejecutar
       Verificar: existe un PR mergeado automaticamente por el job `merge`, con rama eliminada y commit squash en `main`
+      Resultado: el PR #6 cumplio el rol de smoke. Merged por el job `merge`, rama remota eliminada, commit squash `8856c4f` en `main`. El PR #5 sigue abierto como fixture del fallo original y puede cerrarse.
