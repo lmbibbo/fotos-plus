@@ -7,6 +7,7 @@ from typing import Optional, Sequence
 
 from .grouping import build_suggestions, suggestions_counts
 from .index import (
+    edicion_path_next_to,
     index_path_for,
     indexes_dir,
     suggestions_path_next_to,
@@ -88,6 +89,17 @@ def build_parser() -> argparse.ArgumentParser:
             "Ruta del HTML a escribir. Por defecto se escribe junto al indice."
         ),
     )
+    view_parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Sirve el visualizador en un servidor local (solo loopback).",
+    )
+    view_parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Puerto a usar en modo servidor. Si no se indica, se elige uno libre.",
+    )
     return parser
 
 
@@ -167,6 +179,40 @@ def _write_viewer_file(index_path: Path, output: Optional[Path]) -> Path:
     return target
 
 
+def _serve_viewer(index_path: Path, output: Optional[Path], port: Optional[int]) -> int:
+    """Escribe el HTML igual que siempre y encima sirve una copia editable.
+
+    El archivo del disco se genera en solo lectura: el servidor no lo modifica, pinta
+    la misma pagina con los controles de edicion y guarda en el archivo hermano de
+    edicion.
+    """
+    from .server import EditServerError, start_edit_server
+
+    target = _write_viewer_file(index_path, output)
+    print(f"Visualizador: {target}", file=sys.stdout)
+
+    try:
+        server, actual_port, token = start_edit_server(index_path, port=port)
+    except EditServerError as error:
+        print(f"No se pudo arrancar el servidor: {error}", file=sys.stderr)
+        return EXIT_PATH_ERROR
+
+    print(f"Servidor de edicion: http://127.0.0.1:{actual_port}/", file=sys.stdout)
+    print(
+        f"Archivo de edicion: {edicion_path_next_to(index_path)}",
+        file=sys.stdout,
+    )
+    print("Ctrl+C para cerrar.", file=sys.stdout)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nCerrando el servidor.", file=sys.stdout)
+    finally:
+        server.shutdown()
+        server.server_close()
+    return EXIT_OK
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     try:
@@ -182,6 +228,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"No existe el indice: {index_path}", file=sys.stderr)
             return EXIT_PATH_ERROR
         try:
+            if args.serve:
+                return _serve_viewer(index_path, args.output, args.port)
             target = _write_viewer_file(index_path, args.output)
         except (OSError, ValueError) as error:
             print(f"No se genero el visualizador: {error}", file=sys.stderr)

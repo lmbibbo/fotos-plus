@@ -94,6 +94,70 @@ Cómo se agrupan las fotos:
 Si el índice no tiene archivo de sugerencias contiguo, el comando no falla: genera el mismo HTML
 con todas las fotos en una grilla plana, sin agrupar.
 
+### Renombrar los grupos con un servidor local
+
+El HTML exportado es de **solo lectura**: es un archivo suelto, y sin nadie detrás no hay
+dónde guardar un cambio. Para poner nombre a las tarjetas hay que arrancar el servidor local.
+
+```bash
+# Servir el visualizador y permitir renombrar los grupos
+fotos-plus view ./indice.json --serve
+
+# Elegir el puerto a mano (si no se indica, se busca uno libre)
+fotos-plus view ./indice.json --serve --port 8123
+```
+
+El servidor:
+
+- Escribe el mismo HTML de antes, junto al índice, y **no lo modifica**: ese archivo sigue
+  siendo de solo lectura.
+- Escucha únicamente en `127.0.0.1`. No es alcanzable desde la red.
+- Levanta una copia de la página en memoria con los controles de edición. Al guardar, el
+  título de la tarjeta se actualiza sin recargar.
+- Muestra la dirección al arrancar. Ctrl+C lo cierra y libera el puerto.
+
+El token de sesión se genera en cada arranque y viaja en la página servida: sin él, el
+endpoint de escritura responde `403`. El servidor tampoco envía cabeceras CORS, así que
+otra pestaña de otro origen no puede escribir.
+
+#### Dónde se guardan los nombres
+
+En un archivo hermano del índice, `<indice>-edicion.json`:
+
+```json
+{
+  "version": 1,
+  "based_on_scanned_at": "2026-01-01T00:00:00",
+  "labels": {
+    "2024-05-01T00:00:00": "Viaje a Bariloche"
+  }
+}
+```
+
+La clave es la fecha de la primera foto del grupo (`first_captured_at`), la misma que ya usa
+el visor para ordenar. Cada grupo arranca en una foto distinta, así que esa clave es única.
+
+Reglas:
+
+- Una etiqueta **nunca se guarda vacía**. Borrar el texto no la quita: hay un botón
+  "Quitar etiqueta", que es una operación aparte.
+- El texto se guarda sin espacios alrededor.
+- Si la referencia no corresponde a ningún grupo del escaneo vigente, el servidor lo dice y
+  **no escribe nada**. El archivo de etiquetas no se toca.
+
+Quién escribe cada archivo, para que no se pisen:
+
+| Archivo | Lo escribe |
+| --- | --- |
+| `<indice>.json` | solo `scan` |
+| `<indice>-sugerencias.json` | solo `scan` |
+| `<indice>-edicion.json` | solo el servidor de edición |
+| `<indice>.html` | solo `view` |
+
+Un `scan` posterior **no borra** las etiquetas: como `first_captured_at` es la fecha de la
+primera foto del grupo, sigue resolviendo al mismo grupo. Si el escaneo se rehizo después de
+escribir los nombres, la página avisa de que puede haber deriva.
+
 ### Lanzador para Windows
 
 En la raíz del proyecto hay `fotos-plus.bat`, pensado para no depender de que el
@@ -358,3 +422,16 @@ Cualquier otro archivo se ignora en silencio.
 pip install -e ".[dev]"
 python -m pytest
 ```
+
+### Entrega de cambios
+
+Cada change se trabaja en una rama `feature/<nombre-del-cambio>`. El archive se
+ejecuta sobre esa misma rama, de modo que el PR a `main` lleva el código, los
+tests, las specs sincronizadas y el change archivado, todo junto.
+
+Al aplicar la etiqueta `archive` al pull request, la CI corre la suite de tests y
+la validación de specs. Si ambos pasan, el PR se mergea automáticamente a `main`
+con squash y la rama se elimina. Si alguno falla, no hay merge.
+
+El paso de merge usa el token que GitHub provee al workflow; no hay credenciales
+que configurar en el repositorio.

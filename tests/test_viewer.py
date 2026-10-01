@@ -380,3 +380,91 @@ def test_with_suggestions_generates_cards_not_flat(tmp_path: Path) -> None:
 
     assert flat is False
     assert document.count('<article class="card"') == 2
+
+
+# --- export estatico: refleja las etiquetas y sigue siendo de solo lectura ------
+
+
+def test_the_export_reflects_the_saved_labels(tmp_path: Path) -> None:
+    """Escenario 'El export refleja las etiquetas'.
+
+    El archivo de edicion existe y el HTML exportado sale con los titulos de las
+    etiquetas, sin ningun control para cambiarlas.
+    """
+    from fotos_plus.index import (
+        edicion_path_next_to,
+        suggestions_path_next_to,
+        write_index,
+        write_suggestions,
+    )
+    from fotos_plus.labels import LabelOverlay, write_edicion
+    from fotos_plus.models import ScanResult
+    from fotos_plus.viewer import build_view
+
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    photos = [photo("a.jpg", "2024-01-01T00:00:00"), photo("b.jpg", "2024-07-01T00:00:00")]
+    index_path = tmp_path / "indice.json"
+    write_index(ScanResult(root=str(root), scanned_at="2026-01-01T00:00:00", photos=photos), index_path)
+    write_suggestions(
+        suggestions(
+            trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")],
+            periods=[period("2024-07-01T00:00:00", "2024-07-02T00:00:00")],
+        ),
+        suggestions_path_next_to(index_path),
+    )
+    write_edicion(
+        LabelOverlay(
+            based_on_scanned_at="2026-01-01T00:00:00",
+            labels={"2024-01-01T00:00:00": "Viaje a Bariloche"},
+        ),
+edicion_path_next_to(index_path),
+    )
+
+    document, flat = build_view(index_path)
+
+    assert flat is False
+    assert "<h2>Viaje a Bariloche</h2>" in document
+    # el resto de los datos de la tarjeta no cambian
+    assert "Argentina" in document
+    # y sigue siendo de solo lectura
+    assert 'data-mode="solo-lectura"' in document
+    assert "solo lectura" in document
+    assert "<form" not in document
+    assert "fetch(" not in document
+
+
+def test_a_labelled_period_card_declares_no_country() -> None:
+    """Escenario 'Etiqueta sobre un periodo': sin pais, porque el periodo no declara."""
+    from fotos_plus.viewer import render_html
+
+    groups = assign_groups(
+        [photo("a.jpg", "2024-07-01T00:00:00")],
+        suggestions(periods=[period("2024-07-01T00:00:00", "2024-07-02T00:00:00")]),
+        labels={"2024-07-01T00:00:00": "Sin fecha clara"},
+    )
+
+    assert groups[0].kind == "period"
+    assert groups[0].title == "Sin fecha clara"
+    assert groups[0].country is None
+
+    document = render_html(groups, "C:/fotos", labels={"2024-07-01T00:00:00": "Sin fecha clara"})
+    assert "<h2>Sin fecha clara</h2>" in document
+    assert "Argentina" not in document
+
+
+def test_a_labelled_trip_keeps_its_other_data() -> None:
+    """Escenario 'Grupo con etiqueta': la etiqueta cambia el titulo y nada mas."""
+    groups = assign_groups(
+        [photo("a.jpg", "2024-01-01T00:00:00")],
+        suggestions(trips=[trip("2024-01-01T00:00:00", "2024-01-05T00:00:00")]),
+        labels={"2024-01-01T00:00:00": "Viaje a Bariloche"},
+    )
+
+    group = groups[0]
+    assert group.title == "Viaje a Bariloche"
+    assert group.country == "Argentina"
+    assert group.first_captured_at == "2024-01-01T00:00:00"
+    assert group.last_captured_at == "2024-01-05T00:00:00"
+    assert group.photo_count == 1

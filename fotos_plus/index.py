@@ -11,6 +11,7 @@ from typing import Optional
 from .models import ScanResult, SuggestionsResult
 
 SUGGESTIONS_SUFFIX = "-sugerencias"
+EDITION_SUFFIX = "-edicion"
 
 
 def state_dir() -> Path:
@@ -55,11 +56,28 @@ def suggestions_path_next_to(index_path: Path) -> Path:
     return index_path.parent / f"{index_path.stem}{SUGGESTIONS_SUFFIX}.json"
 
 
+def edicion_path_next_to(index_path: Path) -> Path:
+    """Ruta del archivo de edicion contiguo al indice.
+
+    Vive al lado del archivo de sugerencias y es un archivo distinto: lo escribe el
+    editor y lo lee el visor, mientras que el de sugerencias solo lo escribe el
+    escaneo. Cada archivo tiene un unico escritor.
+    """
+    index_path = Path(index_path)
+    return index_path.parent / f"{index_path.stem}{EDITION_SUFFIX}.json"
+
+
 def default_index_path(root: Path) -> Path:
     return index_path_for(root)
 
 
-def _write_json_atomic(payload: dict, path: Path) -> Path:
+def write_json_atomic(payload: dict, path: Path) -> Path:
+    """Escribe un JSON de forma atomica.
+
+    Se escribe primero en un temporal del mismo directorio y despues se renombra con
+    `os.replace`, que es atomico en el mismo sistema de archivos. Asi una
+    interrupcion nunca deja un JSON a medias.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     body = json.dumps(payload, indent=2, ensure_ascii=False)
@@ -81,11 +99,11 @@ def _write_json_atomic(payload: dict, path: Path) -> Path:
 
 
 def write_index(result: ScanResult, path: Path) -> Path:
-    return _write_json_atomic(result.to_dict(), path)
+    return write_json_atomic(result.to_dict(), path)
 
 
 def write_suggestions(result: SuggestionsResult, path: Path) -> Path:
-    return _write_json_atomic(result.to_dict(), path)
+    return write_json_atomic(result.to_dict(), path)
 
 
 def read_index(path: Path) -> ScanResult:
