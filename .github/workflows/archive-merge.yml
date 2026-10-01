@@ -1,0 +1,48 @@
+name: archive-merge
+
+# Se dispara al aplicar una etiqueta a un PR. El job `verify` corre siempre;
+# el job `merge` solo corre si la etiqueta es exactamente `archive`.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: pip install -e ".[dev]"
+
+      - name: Ejecutar tests
+        run: python -m pytest -q
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validar specs y changes
+        run: npx --yes openspec validate --all --strict
+
+  merge:
+    name: merge
+    needs: verify
+    if: github.event.label.name == 'archive'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge del pull request
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: gh pr merge "$PR_NUMBER" --repo "$REPO" --squash --delete-branch

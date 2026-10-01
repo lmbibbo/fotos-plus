@@ -8,11 +8,13 @@ context: |
   - Incluye un visualizador ordenado de las fotos ya organizadas.
   Tech stack:
   - App: Python
-  - Persistencia: PostgreSQL.
   - Pruebas: pytest.
   Git workflow:
   - Cada cambio se desarrolla en una rama `feature/<nombre-del-cambio>`.
-  - No se permiten commits ni push directos a `main`.
+  - `openspec archive` se ejecuta SOBRE esa rama de feature, nunca sobre `main`.
+  - El resultado del archive se commitea en la misma rama, junto con el
+    código y los tests.
+  - La rama se pushea y se abre un PR contra `main` conteniendo todo el cambio.
 
 rules:
   proposal:
@@ -24,6 +26,15 @@ rules:
       for MUST or SHALL
   design:
     - Include sequence diagrams for complex flows
+
+operations:
+  archive:
+    guidance:
+      - Ejecutar el archive sobre la rama de feature actual, nunca sobre `main`.
+      - Un único commit con código, tests, specs sincronizadas y archive.
+      - Correr `openspec validate --specs --strict` antes de commitear.
+      - git push -u origin <rama> y luego gh pr create --base main.
+      - Si la rama ya tiene un PR abierto, no crear otro.
 
 # Project context (optional)
 # This is shown to AI when creating artifacts.
