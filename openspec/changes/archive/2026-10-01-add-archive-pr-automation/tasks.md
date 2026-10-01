@@ -20,10 +20,12 @@
 
 ## 3. Documentar gating en branch protection (fuera del repo)
 
-- [ ] 3.1 Verificar existencia del check `verify` mediante un run de prueba (push del workflow a una rama feature y abrir PR con etiqueta `archive`). Confirmar que aparece el status check con nombre exacto `verify`
+- [x] 3.1 Verificar existencia del check `verify` mediante un run de prueba (push del workflow a una rama feature y abrir PR con etiqueta `archive`). Confirmar que aparece el status check con nombre exacto `verify`
       Verificar: en el PR de prueba, GitHub muestra el check `verify` (passed/failed) y es el job name
+      Resultado: PR #5 (test/archive-merge-smoke). El check aparece con el nombre exacto `verify`. Falló con exit 1 por 2 tests no portables (tests/test_cli.py::test_default_index_path_is_used_when_not_given, tests/test_index.py::test_default_index_path_follows_case_insensitive_paths). El gate funciono: verify fallo y merge no corrio.
 - [ ] 3.2 Activar branch protection en `main` requiriendo el status check `verify` (required status checks). No exigir approvals si se mantiene la política sin revisión previa; documentar el cambio en el PR
       Verificar: `gh api repos/lmbibbo/fotos-plus/branches/main/protection --jq '.required_status_checks.contexts'` incluye `"verify"` tras la activación
+      BLOQUEADO: no activar hasta que el suite pase en Linux. Con tests rojos, el required check dejaria `main` sin poder mergear. Depende del change de portabilidad de tests.
 
 ## 4. Integración con el flujo de archive (operativo)
 
@@ -36,8 +38,10 @@
 
 - [ ] 5.1 Crear PR de prueba (rama temporal) que ejecute el workflow: aplicar etiqueta `archive` y comprobar que `verify` pasa y que el PR se mergea a `main` con `--squash`. Borrar la rama temporal tras la prueba
       Verificar: el PR fue mergeado, la rama feature fue borrada y el commit aparece en `main` con mensaje squash
-- [ ] 5.2 Revertir o dejar branch protection activo y validar que un PR sin etiqueta `archive` NO dispara el job `merge` (aunque `verify` pueda correr si se configura; en este diseño `merge` depende de la etiqueta)
+      BLOQUEADO: el PR #5 sigue abierto a proposito (fallo de verify). Rehacer el smoke cuando el suite pase en Linux.
+- [x] 5.2 Revertir o dejar branch protection activo y validar que un PR sin etiqueta `archive` NO dispara el job `merge` (aunque `verify` pueda correr si se configura; en este diseño `merge` depende de la etiqueta)
       Verificar: en un PR sin etiqueta, el job `merge` se salta (`if: github.event.label.name == 'archive'`) y no hay intento de merge
+      Resultado: verificado de forma implicita. El PR #4 se creo sin etiqueta y no genero ninguna ejecucion (`no checks reported`); el workflow disparo unicamente al aplicar `archive` en el PR #5. La rama test/archive-merge-smoke se conserva como fixture del caso fallido.
 
 ## 6. Cierre del change
 
