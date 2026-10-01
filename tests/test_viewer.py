@@ -15,8 +15,11 @@ from fotos_plus.models import (
 )
 from fotos_plus.viewer import (
     ORPHAN_TITLE,
+    TAG_CATALOG_ID,
     THUMBNAILS_PER_GROUP,
+    UNTAGGED_SECTION_TITLE,
     assign_groups,
+    group_sections,
 )
 
 
@@ -353,6 +356,8 @@ def test_flat_mode_renders_all_photos_without_grouping(tmp_path: Path) -> None:
     assert flat is True
     assert document.count('class="thumb"') == 4
     assert 'class="card flat"' in document
+    # las miniaturas siguen en la grilla responsive, no apiladas en una columna
+    assert '<div class="grid">' in document
 
 
 def test_with_suggestions_generates_cards_not_flat(tmp_path: Path) -> None:
@@ -468,3 +473,445 @@ def test_a_labelled_trip_keeps_its_other_data() -> None:
     assert group.first_captured_at == "2024-01-01T00:00:00"
     assert group.last_captured_at == "2024-01-05T00:00:00"
     assert group.photo_count == 1
+
+
+# --- Secciones por tag ---
+
+
+def _tagged(*entries: tuple[str, str | None]) -> dict[str, str]:
+    return {key: tag for key, tag in entries if tag is not None}
+
+
+def test_tags_reach_the_groups_without_touching_their_content() -> None:
+    result = suggestions(
+        trips=[trip("2024-05-01T00:00:00", "2024-05-02T00:00:00")]
+    )
+    photos = [photo("a.jpg", "2024-05-01T10:00:00")]
+
+    plain = assign_groups(photos, result)
+    tagged = assign_groups(
+        photos,
+        result,
+        labels={},
+        tags={"2024-05-01T00:00:00": "Familia"},
+    )
+
+    assert tagged[0].tag == "Familia"
+    # el tag no altera la cantidad de fotos ni el rango
+    assert tagged[0].photo_count == plain[0].photo_count
+    assert tagged[0].first_captured_at == plain[0].first_captured_at
+    assert tagged[0].last_captured_at == plain[0].last_captured_at
+
+
+def test_no_sections_when_nothing_is_tagged() -> None:
+    groups = assign_groups(
+        [photo("a.jpg", "2024-05-01T10:00:00")],
+        suggestions(trips=[trip("2024-05-01T00:00:00", "2024-05-02T00:00:00")]),
+    )
+
+    assert group_sections(groups) == []
+
+
+def test_one_section_per_tag() -> None:
+    result = suggestions(
+        trips=[
+            trip("2024-05-01T00:00:00", "2024-05-02T00:00:00"),
+            trip("2024-06-01T00:00:00", "2024-06-02T00:00:00"),
+            trip("2024-07-01T00:00:00", "2024-07-02T00:00:00"),
+        ]
+    )
+    photos = [
+        photo("a.jpg", "2024-05-01T10:00:00"),
+        photo("b.jpg", "2024-06-01T10:00:00"),
+        photo("c.jpg", "2024-07-01T10:00:00"),
+    ]
+    groups = assign_groups(
+        photos,
+        result,
+        tags={
+            "2024-05-01T00:00:00": "Viaje",
+            "2024-06-01T00:00:00": "Familia",
+            "2024-07-01T00:00:00": "Viaje",
+        },
+    )
+
+    sections = group_sections(groups)
+
+    assert [section.title for section in sections] == ["Viaje", "Familia"]
+    assert [section.count for section in sections] == [2, 1]
+
+
+def test_untagged_groups_get_their_own_section_at_the_end() -> None:
+    result = suggestions(
+        trips=[
+            trip("2024-05-01T00:00:00", "2024-05-02T00:00:00"),
+            trip("2024-06-01T00:00:00", "2024-06-02T00:00:00"),
+        ]
+    )
+    photos = [
+        photo("a.jpg", "2024-05-01T10:00:00"),
+        photo("b.jpg", "2024-06-01T10:00:00"),
+    ]
+    groups = assign_groups(
+        photos,
+        result,
+        tags={"2024-06-01T00:00:00": "Viaje"},
+    )
+
+    sections = group_sections(groups)
+
+    assert [section.tag for section in sections] == ["Viaje", None]
+    assert sections[-1].title == UNTAGGED_SECTION_TITLE
+    assert sections[-1].count == 1
+
+
+def test_sections_are_ordered_by_the_date_of_their_first_group() -> None:
+    result = suggestions(
+        trips=[
+            trip("2024-05-01T00:00:00", "2024-05-02T00:00:00"),
+            trip("2024-06-01T00:00:00", "2024-06-02T00:00:00"),
+        ]
+    )
+    photos = [
+        photo("a.jpg", "2024-05-01T10:00:00"),
+        photo("b.jpg", "2024-06-01T10:00:00"),
+    ]
+    groups = assign_groups(
+        photos,
+        result,
+        tags={
+            "2024-06-01T00:00:00": "Familia",
+            "2024-05-01T00:00:00": "Viaje",
+        },
+    )
+
+    sections = group_sections(groups)
+
+    # el tag mas reciente sigue apareciendo despues: manda la fecha, no el catalogo
+    assert [section.title for section in sections] == ["Viaje", "Familia"]
+
+
+def test_sections_keep_the_date_order_inside_them() -> None:
+    result = suggestions(
+        trips=[
+            trip("2024-05-01T00:00:00", "2024-05-02T00:00:00"),
+            trip("2024-07-01T00:00:00", "2024-07-02T00:00:00"),
+        ]
+    )
+    photos = [
+        photo("a.jpg", "2024-05-01T10:00:00"),
+        photo("b.jpg", "2024-07-01T10:00:00"),
+    ]
+    groups = assign_groups(
+        photos,
+        result,
+        tags={
+            "2024-05-01T00:00:00": "Viaje",
+            "2024-07-01T00:00:00": "Viaje",
+        },
+    )
+
+    section = group_sections(groups)[0]
+
+    assert [group.first_captured_at for group in section.groups] == [
+        "2024-05-01T00:00:00",
+        "2024-07-01T00:00:00",
+    ]
+
+
+def test_a_tag_with_no_assigned_groups_gets_no_section() -> None:
+    groups = assign_groups(
+        [photo("a.jpg", "2024-05-01T10:00:00")],
+        suggestions(trips=[trip("2024-05-01T00:00:00", "2024-05-02T00:00:00")]),
+        tags={"2024-05-01T00:00:00": "Viaje"},
+    )
+
+    # el catalogo puede traer "Trabajo", pero ninguna tarjeta lo tiene
+    sections = group_sections(groups)
+
+    assert [section.title for section in sections] == ["Viaje"]
+
+
+def _tagged_html(
+    root: Path, tags: dict[str, str], catalog=(), token: str | None = None
+) -> str:
+    """Genera el documento del visor con tags ya resueltos en las tarjetas.
+
+    Sin `token` sale el export de solo lectura; con token, la pagina editable.
+    """
+    from fotos_plus.viewer import render_html
+
+    result = suggestions(
+        trips=[
+            trip("2024-01-01T00:00:00", "2024-01-02T00:00:00"),
+            trip("2024-06-01T00:00:00", "2024-06-02T00:00:00"),
+        ]
+    )
+    photos = [
+        photo("a.jpg", "2024-01-01T10:00:00"),
+        photo("b.jpg", "2024-06-01T10:00:00"),
+    ]
+    groups = assign_groups(photos, result, tags=tags)
+    return render_html(groups, str(root), token=token, tag_options=catalog)
+
+
+def test_html_renders_a_section_per_tag(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _tagged_html(
+        root,
+        {
+            "2024-01-01T00:00:00": "Viaje",
+            "2024-06-01T00:00:00": "Familia",
+        },
+    )
+
+    assert document.count('<section class="tag-section"') == 2
+    assert 'data-drop="Viaje"' in document
+    assert 'data-drop="Familia"' in document
+    assert document.count('<article class="card"') == 2
+
+
+def test_html_shows_the_group_count_on_each_section(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _tagged_html(
+        root,
+        {
+            "2024-01-01T00:00:00": "Viaje",
+            "2024-06-01T00:00:00": "Viaje",
+        },
+    )
+
+    assert document.count('<section class="tag-section"') == 1
+    assert '<span class="tag-section-count">2 grupos</span>' in document
+
+
+def test_html_uses_the_singular_for_a_single_group(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _tagged_html(root, {"2024-01-01T00:00:00": "Viaje"})
+
+    assert '<span class="tag-section-count">1 grupo</span>' in document
+
+
+def test_html_ends_with_the_untagged_section(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _tagged_html(root, {"2024-06-01T00:00:00": "Familia"})
+
+    assert 'data-drop=""' in document
+    assert document.index('data-drop="Familia"') < document.index('data-drop=""')
+    assert UNTAGGED_SECTION_TITLE in document
+
+
+def test_html_puts_the_tag_on_each_card(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _tagged_html(
+        root,
+        {
+            "2024-01-01T00:00:00": "Viaje",
+            "2024-06-01T00:00:00": "Familia",
+        },
+    )
+
+    assert 'data-tag="Viaje"' in document
+    assert 'data-tag="Familia"' in document
+
+
+def test_an_untagged_card_carries_an_empty_tag(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _tagged_html(root, {"2024-01-01T00:00:00": "Viaje"})
+
+    assert 'data-tag=""' in document
+
+
+def test_html_without_tags_keeps_the_single_grid(tmp_path: Path) -> None:
+    from fotos_plus.viewer import render_html
+
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+    result = suggestions(
+        trips=[
+            trip("2024-01-01T00:00:00", "2024-01-02T00:00:00"),
+            trip("2024-06-01T00:00:00", "2024-06-02T00:00:00"),
+        ]
+    )
+    photos = [
+        photo("a.jpg", "2024-01-01T10:00:00"),
+        photo("b.jpg", "2024-06-01T10:00:00"),
+    ]
+    groups = assign_groups(photos, result)
+
+    document = render_html(groups, str(root))
+
+    assert document.count('<section class="tag-section"') == 0
+    assert document.count('<div class="grid">') == 1
+    assert document.count('<article class="card"') == 2
+
+
+def test_the_drift_notice_mentions_tags_not_only_labels(tmp_path: Path) -> None:
+    from fotos_plus.labels import LabelResolution
+    from fotos_plus.viewer import render_html
+
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+    groups = assign_groups(
+        [photo("a.jpg", "2024-01-01T10:00:00")],
+        suggestions(trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")]),
+    )
+    # un nombre resuelto, un tag resuelto y un tag que quedo sin grupo
+    drift = LabelResolution(
+        labels={"2024-01-01T00:00:00": "Navidad"},
+        tags={"2024-01-01T00:00:00": "Familia"},
+        unresolved_tags=["2030-01-01T00:00:00"],
+    )
+
+    document = render_html(groups, str(root), drift=drift)
+
+    assert "nombres y tags" in document
+    assert "Siguen guardados" in document
+    # 1 nombre + 1 tag resueltos + 1 sin grupo
+    assert "1 de 3" in document
+
+
+def test_the_tag_selector_offers_the_catalog(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _tagged_html(
+        root,
+        {"2024-01-01T00:00:00": "Viaje"},
+        catalog=["Viaje", "Familia"],
+        token="t0ken",
+    )
+
+    assert f'list="{TAG_CATALOG_ID}"' in document
+    assert '<option value="Familia">' in document
+
+
+def test_the_tag_selector_shows_the_current_tag(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _tagged_html(root, {"2024-01-01T00:00:00": "Familia"}, token="t0ken")
+
+    assert 'value="Familia"' in document
+    assert "Quitar tag" in document
+
+
+def test_an_untagged_card_has_no_remove_button(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _tagged_html(root, {"2024-01-01T00:00:00": "Familia"}, token="t0ken")
+
+    # la segunda tarjeta no tiene tag, asi que no hay nada que quitar
+    assert document.count("Quitar tag") == 1
+
+
+def test_the_catalog_is_emitted_once_for_the_whole_document(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _tagged_html(
+        root,
+        {
+            "2024-01-01T00:00:00": "Familia",
+            "2024-06-01T00:00:00": "Viaje",
+        },
+        token="t0ken",
+    )
+
+    assert document.count(f'<datalist id="{TAG_CATALOG_ID}">') == 1
+
+
+def test_the_catalog_includes_tags_that_still_have_cards(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    # "Viaje" no esta en el catalogo pero una tarjeta lo tiene
+    document = _tagged_html(
+        root,
+        {"2024-06-01T00:00:00": "Viaje"},
+        catalog=["Familia"],
+        token="t0ken",
+    )
+
+    assert '<option value="Familia">' in document
+    assert '<option value="Viaje">' in document
+
+
+# --- Arrastre y solo lectura ---
+
+
+def test_the_editable_page_makes_cards_draggable(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _tagged_html(root, {"2024-01-01T00:00:00": "Viaje"}, token="t0ken")
+
+    assert 'card.setAttribute("draggable", "true")' in document
+    assert "dragstart" in document
+
+
+def test_the_editable_page_wires_the_three_drop_targets(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _tagged_html(root, {"2024-01-01T00:00:00": "Viaje"}, token="t0ken")
+
+    # tarjeta, seccion y el "Sin tag" se resuelven con el mismo manejador
+    assert 'card.getAttribute("data-tag") || ""' in document
+    assert 'seccion.getAttribute("data-drop") || ""' in document
+    assert 'if (tagDestino)' in document
+
+
+def test_the_selector_refuses_an_empty_tag_without_calling_the_server(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _tagged_html(root, {"2024-01-01T00:00:00": "Viaje"}, token="t0ken")
+
+    # un tag vacio avisa y no se manda: quitarlo es clear_tag, no set_tag con ""
+    assert "Un tag no puede estar vacio" in document
+    assert "if (!texto)" in document
+
+
+def test_a_rejected_tag_leaves_the_card_untouched(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _tagged_html(root, {"2024-01-01T00:00:00": "Viaje"}, token="t0ken")
+
+    # el DOM no se toca hasta que el servidor confirma, y recien ahi se recarga
+    assert "mostrarErrorTag" in document
+    assert "window.location.reload()" in document
+
+
+def test_the_read_only_export_has_no_drag_or_tag_controls(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _tagged_html(root, {"2024-01-01T00:00:00": "Viaje"})
+
+    # El script de edicion no viaja: sin el no hay arrastre ni selector, porque las
+    # tarjetas no reciben el atributo draggable que el CSS de arrastre espera.
+    assert "dragstart" not in document
+    assert "set_tag" not in document
+    assert "clear_tag" not in document
+    assert "Quitar tag" not in document
+    assert f'<datalist id="{TAG_CATALOG_ID}">' not in document
+    assert "<script>" not in document
+    # pero las secciones si se ven
+    assert '<section class="tag-section"' in document
+    assert 'data-tag="Viaje"' in document
+    assert "solo lectura" in document

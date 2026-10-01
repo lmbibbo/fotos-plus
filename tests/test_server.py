@@ -591,3 +591,183 @@ def test_drift_is_reported_when_the_scan_moved_on(tmp_path: Path, serving) -> No
     _, document, _ = get(url + "/", token)
 
     assert "El escaneo se rehizo" in document
+
+
+# --- Tags por el servidor --------------------------------------------------------
+
+
+def test_a_valid_tag_is_persisted_and_added_to_the_catalog(tmp_path: Path, serving) -> None:
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, body = post(
+        url + "/api/labels",
+        token,
+        {
+            "action": "set_tag",
+            "key": "2024-05-01T00:00:00",
+            "tag": "Familia",
+            "token": token,
+        },
+    )
+
+    assert status == 200
+    assert body["ok"] is True
+    overlay = read_edicion(edicion_path_next_to(index_path))
+    assert overlay.tags == ["Familia"]
+    assert overlay.tagged == {"2024-05-01T00:00:00": "Familia"}
+
+
+def test_an_empty_tag_is_rejected_and_nothing_is_written(tmp_path: Path, serving) -> None:
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, body = post(
+        url + "/api/labels",
+        token,
+        {
+            "action": "set_tag",
+            "key": "2024-05-01T00:00:00",
+            "tag": "   ",
+            "token": token,
+        },
+    )
+
+    assert status == 400
+    assert "no puede estar vacio" in body["error"]
+    assert not edicion_path_next_to(index_path).exists()
+
+
+def test_a_tag_on_a_reference_that_does_not_resolve_is_rejected(
+    tmp_path: Path, serving
+) -> None:
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, body = post(
+        url + "/api/labels",
+        token,
+        {
+            "action": "set_tag",
+            "key": "2030-01-01T00:00:00",
+            "tag": "Familia",
+            "token": token,
+        },
+    )
+
+    assert status == 400
+    assert "no corresponde a ningun grupo actual" in body["error"]
+    assert not edicion_path_next_to(index_path).exists()
+
+
+def test_a_tag_post_without_a_token_is_rejected(tmp_path: Path, serving) -> None:
+    index_path = build_index(tmp_path)
+    url, _ = serving(index_path)
+
+    status, body = post(
+        url + "/api/labels",
+        "token-inventado",
+        {
+            "action": "set_tag",
+            "key": "2024-05-01T00:00:00",
+            "tag": "Familia",
+            "token": "token-inventado",
+        },
+    )
+
+    assert status == 403
+    assert "token invalido" in body["error"]
+    assert not edicion_path_next_to(index_path).exists()
+
+
+def test_clearing_a_tag_removes_the_assignment_but_keeps_the_catalog(
+    tmp_path: Path, serving
+) -> None:
+    from fotos_plus.labels import LabelOverlay, write_edicion
+
+    index_path = build_index(tmp_path)
+    write_edicion(
+        LabelOverlay(
+            tags=["Familia"],
+            tagged={"2024-05-01T00:00:00": "Familia"},
+        ),
+        edicion_path_next_to(index_path),
+    )
+    url, token = serving(index_path)
+
+    status, _ = post(
+        url + "/api/labels",
+        token,
+        {"action": "clear_tag", "key": "2024-05-01T00:00:00", "token": token},
+    )
+
+    assert status == 200
+    overlay = read_edicion(edicion_path_next_to(index_path))
+    assert overlay.tagged == {}
+    assert overlay.tags == ["Familia"]
+
+
+def test_clearing_a_tag_that_is_not_there_is_rejected(tmp_path: Path, serving) -> None:
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, body = post(
+        url + "/api/labels",
+        token,
+        {"action": "clear_tag", "key": "2024-05-01T00:00:00", "token": token},
+    )
+
+    assert status == 400
+    assert "no tiene tag para quitar" in body["error"]
+
+
+def test_saving_a_label_through_the_server_keeps_the_tags(tmp_path: Path, serving) -> None:
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path)
+    post(
+        url + "/api/labels",
+        token,
+        {
+            "action": "set_tag",
+            "key": "2024-05-01T00:00:00",
+            "tag": "Familia",
+            "token": token,
+        },
+    )
+
+    status, _ = post(
+        url + "/api/labels",
+        token,
+        {
+            "action": "set",
+            "key": "2024-05-01T00:00:00",
+            "text": "Navidad",
+            "token": token,
+        },
+    )
+
+    assert status == 200
+    overlay = read_edicion(edicion_path_next_to(index_path))
+    assert overlay.labels == {"2024-05-01T00:00:00": "Navidad"}
+    assert overlay.tagged == {"2024-05-01T00:00:00": "Familia"}
+
+
+def test_the_served_page_carries_the_tags_and_the_catalog(tmp_path: Path, serving) -> None:
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path)
+    post(
+        url + "/api/labels",
+        token,
+        {
+            "action": "set_tag",
+            "key": "2024-05-01T00:00:00",
+            "tag": "Familia",
+            "token": token,
+        },
+    )
+
+    _, document, _ = get(url + "/", token)
+
+    assert 'data-tag="Familia"' in document
+    assert '<section class="tag-section"' in document
+    assert '<option value="Familia">' in document

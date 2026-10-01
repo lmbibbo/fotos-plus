@@ -14,12 +14,15 @@ from fotos_plus.index import (
 from fotos_plus.labels import (
     EDITION_VERSION,
     EMPTY_LABEL_ERROR,
+    EMPTY_TAG_ERROR,
     LabelError,
     LabelOverlay,
+    clear_tag,
     read_edicion,
     remove_label,
     resolve_labels,
     set_label,
+    set_tag,
     validate_label,
     write_edicion,
 )
@@ -451,3 +454,355 @@ def test_an_edit_file_without_a_scan_stamp_is_not_reported_as_drifted() -> None:
 
     assert resolution.scan_advanced is False
     assert resolution.drifted is False
+
+# --- Formato v2: catalogo de tags, asignaciones y migracion desde v1 ---
+
+
+def test_new_overlay_serializes_tags_and_tagged() -> None:
+    overlay = LabelOverlay(
+        based_on_scanned_at="2026-01-01T00:00:00",
+        tags=["Viaje", "Familia"],
+        tagged={"2024-05-01T00:00:00": "Familia"},
+    )
+
+    data = overlay.to_dict()
+
+    assert data["version"] == EDITION_VERSION
+    assert data["version"] == 2
+    assert data["tags"] == ["Viaje", "Familia"]
+    assert data["tagged"] == {"2024-05-01T00:00:00": "Familia"}
+
+
+def test_reads_a_v1_file_and_keeps_its_labels(tmp_path: Path) -> None:
+    path = tmp_path / "x-edicion.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "based_on_scanned_at": "2026-01-01T00:00:00",
+                "labels": {"2024-05-01T00:00:00": "Bariloche"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    overlay = read_edicion(path)
+
+    assert overlay.labels == {"2024-05-01T00:00:00": "Bariloche"}
+    # migrado en memoria: sin tags, y no reescrito todavia en disco
+    assert overlay.tags == []
+    assert overlay.tagged == {}
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 1
+
+
+def test_a_v1_file_is_written_as_v2_on_the_next_save(tmp_path: Path) -> None:
+    path = tmp_path / "x-edicion.json"
+    path.write_text(
+        json.dumps({"version": 1, "labels": {"2024-05-01T00:00:00": "Bariloche"}}),
+        encoding="utf-8",
+    )
+    overlay = read_edicion(path)
+
+    write_edicion(
+        LabelOverlay(
+            based_on_scanned_at=overlay.based_on_scanned_at,
+            labels=overlay.labels,
+            tags=["Familia"],
+        ),
+        path,
+    )
+
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["version"] == 2
+    assert saved["labels"] == {"2024-05-01T00:00:00": "Bariloche"}
+
+
+def test_rejects_an_unknown_edit_version(tmp_path: Path) -> None:
+    path = tmp_path / "x-edicion.json"
+    path.write_text(json.dumps({"version": 99}), encoding="utf-8")
+
+    with pytest.raises(LabelError) as error:
+        read_edicion(path)
+
+    assert "99" in str(error.value)
+
+
+def test_tag_names_are_stripped_but_keep_their_case() -> None:
+    overlay = LabelOverlay.from_dict(
+        {
+            "version": 2,
+            "tags": ["Viaje", "  Familia  "],
+            "tagged": {"2024-05-01T00:00:00": " familia "},
+        }
+    )
+
+    # la forma guardada es la primera con la que se declaro el tag
+    assert overlay.tags == ["Viaje", "Familia"]
+    assert overlay.tagged == {"2024-05-01T00:00:00": "Familia"}
+
+
+def test_catalog_rejects_an_empty_tag(tmp_path: Path) -> None:
+    path = tmp_path / "x-edicion.json"
+    path.write_text(json.dumps({"version": 2, "tags": ["Viaje", "   "]}), encoding="utf-8")
+
+    with pytest.raises(LabelError) as error:
+        read_edicion(path)
+
+    assert str(error.value) == EMPTY_TAG_ERROR
+
+
+def test_catalog_rejects_two_tags_that_only_differ_in_case() -> None:
+    with pytest.raises(LabelError) as error:
+        LabelOverlay.from_dict({"version": 2, "tags": ["Familia", "familia"]})
+
+    assert "familia" in str(error.value)
+
+
+def test_tagged_rejects_a_tag_absent_from_the_catalog() -> None:
+    with pytest.raises(LabelError) as error:
+        LabelOverlay.from_dict(
+            {"version": 2, "tags": ["Viaje"], "tagged": {"2024-05-01T00:00:00": "Familia"}}
+        )
+
+    assert "Familia" in str(error.value)
+
+
+def test_canonical_tag_matches_ignoring_case_and_spaces() -> None:
+    overlay = LabelOverlay(tags=["Familia"])
+
+    assert overlay.canonical_tag(" familia ") == "Familia"
+    assert overlay.canonical_tag("Viaje") is None
+    assert overlay.canonical_tag("   ") is None
+
+
+def test_write_rejects_a_hand_edited_assignment_to_an_unknown_tag(tmp_path: Path) -> None:
+    path = tmp_path / "x-edicion.json"
+    overlay = LabelOverlay(
+        tags=["Viaje"],
+        tagged={"2024-05-01T00:00:00": "Familia"},
+    )
+
+    with pytest.raises(LabelError):
+        write_edicion(overlay, path)
+
+    assert not path.exists()
+
+
+def test_write_rejects_a_repeated_tag_in_the_catalog(tmp_path: Path) -> None:
+    path = tmp_path / "x-edicion.json"
+
+    with pytest.raises(LabelError):
+        write_edicion(LabelOverlay(tags=["Familia", " FAMILIA "]), path)
+
+    assert not path.exists()
+
+
+def test_tags_survive_a_write_and_read_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "x-edicion.json"
+    overlay = LabelOverlay(
+        based_on_scanned_at="2026-01-01T00:00:00",
+        labels={"2024-05-01T00:00:00": "Navidad"},
+        tags=["Viaje", "Familia"],
+        tagged={"2024-05-01T00:00:00": "Familia"},
+    )
+
+    write_edicion(overlay, path)
+
+    assert read_edicion(path) == overlay
+
+
+# --- Operaciones de tag ---
+
+
+def _groups(*keys: str) -> SuggestionsResult:
+    return SuggestionsResult(
+        root="r",
+        scanned_at="2026-01-01T00:00:00",
+        trips=[trip(key, key) for key in keys],
+        periods=[],
+    )
+
+
+def test_set_tag_creates_the_tag_in_the_catalog() -> None:
+    groups = _groups("2024-05-01T00:00:00")
+
+    overlay = set_tag(LabelOverlay(tags=["Viaje"]), groups, "2024-05-01T00:00:00", "Trabajo")
+
+    assert overlay.tags == ["Viaje", "Trabajo"]
+    assert overlay.tagged == {"2024-05-01T00:00:00": "Trabajo"}
+
+
+def test_set_tag_reuses_an_equivalent_existing_tag() -> None:
+    groups = _groups("2024-05-01T00:00:00")
+    before = LabelOverlay(tags=["Familia"])
+
+    overlay = set_tag(before, groups, "2024-05-01T00:00:00", " familia ")
+
+    assert overlay.tags == ["Familia"]
+    assert overlay.tagged == {"2024-05-01T00:00:00": "Familia"}
+
+
+def test_set_tag_does_not_mutate_the_overlay_it_receives() -> None:
+    groups = _groups("2024-05-01T00:00:00")
+    before = LabelOverlay(tags=["Viaje"])
+
+    set_tag(before, groups, "2024-05-01T00:00:00", "Familia")
+
+    assert before.tags == ["Viaje"]
+    assert before.tagged == {}
+
+
+def test_set_tag_replaces_the_previous_tag_of_the_group() -> None:
+    groups = _groups("2024-05-01T00:00:00")
+    before = LabelOverlay(tags=["Viaje", "Familia"], tagged={"2024-05-01T00:00:00": "Familia"})
+
+    overlay = set_tag(before, groups, "2024-05-01T00:00:00", "Viaje")
+
+    assert overlay.tagged == {"2024-05-01T00:00:00": "Viaje"}
+    # el catalogo conserva los dos tags
+    assert overlay.tags == ["Viaje", "Familia"]
+
+
+def test_set_tag_keeps_the_title_of_the_group() -> None:
+    groups = _groups("2024-05-01T00:00:00")
+    before = LabelOverlay(
+        labels={"2024-05-01T00:00:00": "Navidad"},
+        tags=["Familia"],
+    )
+
+    overlay = set_tag(before, groups, "2024-05-01T00:00:00", "Familia")
+
+    assert overlay.labels == {"2024-05-01T00:00:00": "Navidad"}
+    assert overlay.tagged == {"2024-05-01T00:00:00": "Familia"}
+
+
+def test_set_tag_rejects_an_empty_tag() -> None:
+    groups = _groups("2024-05-01T00:00:00")
+
+    with pytest.raises(LabelError) as error:
+        set_tag(LabelOverlay(), groups, "2024-05-01T00:00:00", "   ")
+
+    assert str(error.value) == EMPTY_TAG_ERROR
+
+
+def test_set_tag_rejects_a_reference_that_does_not_resolve() -> None:
+    groups = _groups("2024-05-01T00:00:00")
+
+    with pytest.raises(LabelError) as error:
+        set_tag(LabelOverlay(), groups, "2030-01-01T00:00:00", "Familia")
+
+    assert "no corresponde a ningun grupo actual" in str(error.value)
+
+
+def test_set_tag_rejects_an_ambiguous_reference() -> None:
+    groups = SuggestionsResult(
+        root="r",
+        scanned_at="2026-01-01T00:00:00",
+        trips=[trip("2024-05-01T00:00:00", "2024-05-02T00:00:00")],
+        periods=[period("2024-05-01T00:00:00", "2024-05-02T00:00:00")],
+    )
+
+    with pytest.raises(LabelError) as error:
+        set_tag(LabelOverlay(), groups, "2024-05-01T00:00:00", "Familia")
+
+    assert "es ambigua" in str(error.value)
+
+
+def test_clear_tag_drops_the_assignment_and_keeps_the_catalog() -> None:
+    before = LabelOverlay(
+        tags=["Viaje", "Familia"],
+        tagged={"2024-05-01T00:00:00": "Familia"},
+    )
+
+    overlay = clear_tag(before, "2024-05-01T00:00:00")
+
+    assert overlay.tagged == {}
+    assert overlay.tags == ["Viaje", "Familia"]
+
+
+def test_clear_tag_rejects_a_group_without_a_tag() -> None:
+    with pytest.raises(LabelError) as error:
+        clear_tag(LabelOverlay(tags=["Familia"]), "2024-05-01T00:00:00")
+
+    assert "no tiene tag para quitar" in str(error.value)
+
+
+def test_saving_a_title_keeps_the_tags(tmp_path: Path) -> None:
+    groups = _groups("2024-05-01T00:00:00")
+    overlay = set_tag(LabelOverlay(), groups, "2024-05-01T00:00:00", "Familia")
+
+    renamed = set_label(overlay, groups, "2024-05-01T00:00:00", "Navidad")
+
+    assert renamed.tags == ["Familia"]
+    assert renamed.tagged == {"2024-05-01T00:00:00": "Familia"}
+
+
+def test_removing_a_title_keeps_the_tags() -> None:
+    groups = _groups("2024-05-01T00:00:00")
+    overlay = set_label(
+        set_tag(LabelOverlay(), groups, "2024-05-01T00:00:00", "Familia"),
+        groups,
+        "2024-05-01T00:00:00",
+        "Navidad",
+    )
+
+    untitled = remove_label(overlay, "2024-05-01T00:00:00")
+
+    assert untitled.labels == {}
+    assert untitled.tags == ["Familia"]
+    assert untitled.tagged == {"2024-05-01T00:00:00": "Familia"}
+
+
+def test_resolution_reports_resolved_tags() -> None:
+    groups = _groups("2024-05-01T00:00:00", "2024-09-01T00:00:00")
+    overlay = LabelOverlay(
+        tags=["Viaje"],
+        tagged={
+            "2024-05-01T00:00:00": "Viaje",
+            "2024-09-01T00:00:00": "Viaje",
+        },
+    )
+
+    resolution = resolve_labels(overlay, groups)
+
+    assert resolution.tagged_count == 2
+    assert resolution.tags == overlay.tagged
+    assert resolution.drifted is False
+
+
+def test_resolution_reports_a_tag_left_dangling_by_a_rescan() -> None:
+    groups = _groups("2024-05-01T00:00:00")
+    overlay = LabelOverlay(
+        tags=["Viaje"],
+        tagged={
+            "2024-05-01T00:00:00": "Viaje",
+            "2030-01-01T00:00:00": "Viaje",
+        },
+    )
+
+    resolution = resolve_labels(overlay, groups)
+
+    assert resolution.tagged_count == 1
+    assert resolution.unresolved_tags == ["2030-01-01T00:00:00"]
+    assert resolution.dangling_count == 1
+    assert resolution.drifted is True
+    # la asignacion huerfana sigue guardada
+    assert overlay.tagged["2030-01-01T00:00:00"] == "Viaje"
+
+
+def test_a_dangling_tag_alone_marks_the_overlay_as_drifted() -> None:
+    groups = _groups("2024-05-01T00:00:00")
+    overlay = LabelOverlay(based_on_scanned_at="2026-01-01T00:00:00", tags=["Viaje"])
+
+    resolution = resolve_labels(overlay, groups)
+
+    assert resolution.scan_advanced is False
+    assert resolution.drifted is False
+
+    orphan = LabelOverlay(
+        based_on_scanned_at="2026-01-01T00:00:00",
+        tags=["Viaje"],
+        tagged={"2030-01-01T00:00:00": "Viaje"},
+    )
+
+    assert resolve_labels(orphan, groups).drifted is True
