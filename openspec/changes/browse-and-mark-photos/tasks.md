@@ -50,4 +50,4 @@
 - [x] 7.2 Confirm against the reference library that the export still shows five thumbnails per card and stays self-contained, and that the served page gained the browser; verify by generating both from the reference index and comparing the export's thumbnail count and size.
 - [x] 7.3 Confirm no photo in the library root was modified by browsing and marking, including across a server restart and a rescan; verify by hashing the library before and after the exercise.
 - [x] 7.4 Update `README.md` to describe the group browser, the marks and the disposable render cache, including that the export is unchanged; verify the documented commands run as written.
-- [ ] 7.5 Run `openspec validate --specs --strict` and confirm it passes; then commit the code, tests and docs together on the `feature/browse-and-mark-photos` branch, never on `main`.
+- [x] 7.5 Run `openspec validate --specs --strict` and confirm it passes; then commit the code, tests and docs together on the `feature/browse-and-mark-photos` branch, never on `main`.
