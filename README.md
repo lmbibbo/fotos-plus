@@ -94,10 +94,11 @@ Cómo se agrupan las fotos:
 Si el índice no tiene archivo de sugerencias contiguo, el comando no falla: genera el mismo HTML
 con todas las fotos en una grilla plana, sin agrupar.
 
-### Renombrar los grupos con un servidor local
+### Editar con un servidor local
 
 El HTML exportado es de **solo lectura**: es un archivo suelto, y sin nadie detrás no hay
-dónde guardar un cambio. Para poner nombre a las tarjetas hay que arrancar el servidor local.
+dónde guardar un cambio. Para poner nombre a las tarjetas, marcar fotos y recorrerlas hay que
+arrancar el servidor local.
 
 ```bash
 # Servir el visualizador y permitir renombrar los grupos
@@ -117,9 +118,13 @@ El servidor:
   recarga**, porque las secciones se reordenan.
 - Muestra la dirección al arrancar. Ctrl+C lo cierra y libera el puerto.
 
-El token de sesión se genera en cada arranque y viaja en la página servida: sin él, el
-endpoint de escritura responde `403`. El servidor tampoco envía cabeceras CORS, así que
-otra pestaña de otro origen no puede escribir.
+El token de sesión se genera en cada arranque y viaja en la página servida: sin él, los
+endpoints de escritura responden `403`. El token va **siempre en un encabezado**
+(`X-Fotos-Plus-Token`), nunca en la URL: un encabezado propio obliga al navegador a pedir
+permiso antes, y esa es la barrera que corta el acceso desde otra página. El servidor tampoco
+envía cabeceras CORS y además rechaza las peticiones que el navegador marca como
+`Sec-Fetch-Site: cross-site` o `same-site`, que es lo que impide que otra web incruste una
+`<img>` con una foto de tu biblioteca.
 
 #### Dónde se guardan los nombres
 
@@ -127,7 +132,7 @@ En un archivo hermano del índice, `<indice>-edicion.json`:
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "based_on_scanned_at": "2026-01-01T00:00:00",
   "labels": {
     "2024-05-01T00:00:00": "Viaje a Bariloche"
@@ -135,7 +140,10 @@ En un archivo hermano del índice, `<indice>-edicion.json`:
   "tags": ["Viaje", "Familia"],
   "tagged": {
     "2024-05-01T00:00:00": "Familia"
-  }
+  },
+  "marked": [
+    "9f2c1e0a4b6d8f3a5c7e1b9d0f4a6c8e2b5d7f1a3c9e5b7d1f3a5c7e9b1d3f5a7"
+  ]
 }
 ```
 
@@ -150,8 +158,8 @@ Reglas:
 - Si la referencia no corresponde a ningún grupo del escaneo vigente, el servidor lo dice y
   **no escribe nada**. El archivo de etiquetas no se toca.
 
-Un archivo `version: 1` de antes todavía se lee: la primera modificación lo reescribe como
-`version: 2` conservando los nombres que tuviera.
+Un archivo `version: 1` o `version: 2` de antes todavía se lee: la primera modificación lo
+reescribe como `version: 3` conservando los nombres y los tags que tuviera.
 
 #### Tags: agrupar a mano
 
@@ -178,6 +186,50 @@ Cómo se agrupa la página:
 Los tags no cambian los rangos de fechas ni a qué fotos pertenece cada grupo. Solo ordenan lo
 que ya estaba agrupado.
 
+#### Recorrer las fotos de un grupo
+
+Con el servidor arrancado, cada tarjeta que tiene fotos propias ofrece **Ver fotos**: abre un
+recorrido a pantalla completa con las fotos del grupo, una a una.
+
+- Arriba se ve **en cuál de las fotos del grupo estás** (`3 de 120`).
+- `Anterior` y `Siguiente`, o las **flechas del teclado**. En el primer y en el último foto el
+  recorrido se queda quieto: no da la vuelta ni se sale del grupo.
+- Las flechas no interfieren con escribir: si estás con el cursor en un campo de texto, la
+  flecha escribe en el campo.
+- `Escape` o `Cerrar` vuelven a las tarjetas. Cerrar no marca ni desmarca nada.
+
+Un grupo declarado por el escaneo que se quedó sin fotos propias no ofrece el botón: no hay
+nada que recorrer. El grupo de fotos sin clasificar **sí** se puede recorrer.
+
+Lo que se ve no es el archivo original, sino una copia más chica: el lado largo de la imagen
+se limita a 2000 píxeles y se guarda como JPEG. Un JPEG de 13 MB pesa unos 300 KB, así que
+recorrer un grupo entero no baja fotos de 3 MB cada una. La orientación EXIF se aplica antes de
+achicar, así que las fotos verticales salen verticales.
+
+El recorrido funciona **solo en la página servida**. El HTML exportado con `view` (sin
+`--serve`) no lo trae, y no trae ningún control: sigue siendo un archivo suelto de solo lectura.
+
+#### Marcar fotos
+
+Dentro del recorrido, `Marcar` deja la foto apuntada para después; el mismo botón pasa a
+`Quitar la marca`. El botón se pinta distinto cuando la foto está marcada.
+
+- Una foto está **marcada o no marcada**. No hay un tercer estado: "sin decidir" y "no me
+  interesa" no se distinguen.
+- La marca se ve al instante, sin recargar la página.
+- Marcar es **decidir qué mirar después**, no borrar nada: no se borra, no se mueve y no se
+  renombra ninguna foto. Lo que hagas después con las fotos marcadas es otro tema y otro
+  comando.
+- El botón se puede apretar en cualquier foto del grupo, no solo en la primera.
+
+Las marcas se guardan como una lista de **hashes de contenido** en `marked`, dentro del mismo
+`<indice>-edicion.json`. Van por hash y no por ruta para que la marca sobreviva a mover o
+renombrar la foto.
+
+Si una marca apunta a una foto que el escaneo ya no tiene (una unidad sin conectar, por
+ejemplo), no se muestra ni cuenta, pero **sigue en el archivo**: si la foto vuelve, la marca
+vuelve con ella. Lo que sí pasa es que el próximo guardado reescribe el archivo sin ella.
+
 Quién escribe cada archivo, para que no se pisen:
 
 | Archivo | Lo escribe |
@@ -186,6 +238,19 @@ Quién escribe cada archivo, para que no se pisen:
 | `<indice>-sugerencias.json` | solo `scan` |
 | `<indice>-edicion.json` | solo el servidor de edición |
 | `<indice>.html` | solo `view` |
+| `<indice>-renders/` | solo el servidor de edición |
+
+#### La carpeta de renders
+
+El servidor guarda las copias chicas en una carpeta hermana del índice, `<indice>-renders/`, con
+un archivo por foto: `<hash>.jpg`. El nombre es el hash de contenido, así que dos fotos
+idénticas comparten render.
+
+Es una **caché descartable**: si la borrás, la siguiente visita a esa foto la vuelve a hacer y
+listo. No hace falta conservarla para nada, y podés dejarla fuera de tus copias de seguridad.
+Solo crece cuando se recorren fotos: una biblioteca que no se abre no genera renders.
+
+Nunca se escribe nada dentro de la carpeta de fotos.
 
 Un `scan` posterior **no borra** las etiquetas ni los tags: como `first_captured_at` es la fecha
 de la primera foto del grupo, sigue resolviendo al mismo grupo. Si el escaneo se rehizo después de

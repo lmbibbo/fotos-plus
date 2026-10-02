@@ -5,7 +5,7 @@ import html
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Sequence, TYPE_CHECKING
+from typing import Iterable, Optional, Sequence, TYPE_CHECKING
 
 from .index import (
     edicion_path_next_to,
@@ -51,9 +51,23 @@ class Group:
     key: Optional[str] = None
     tag: Optional[str] = None
 
+    @property
+    def browse_key(self) -> str:
+        """La referencia con la que el visor pide la lista de fotos de este grupo.
+
+        Casi todos los grupos ya traen su propia clave, pero el de las fotos sin
+        clasificar no la tiene: el escaneo no declaro ningun viaje ni periodo del que
+        sacarla. Ese grupo tambien se puede recorrer, asi que recibe una referencia
+        reservada, que no choca con ninguna clave real porque las de los grupos
+        sugeridos son marcas de tiempo.
+        """
+        return self.key if self.key is not None else UNCLASSIFIED_GROUP_KEY
+
 
 UNTAGGED_SECTION_TITLE = "Sin tag"
 TAG_CATALOG_ID = "tag-catalog"
+UNCLASSIFIED_GROUP_KEY = "sin-clasificar"
+PHOTO_BROWSER_ID = "photo-browser"
 
 
 @dataclass
@@ -383,6 +397,14 @@ def _group_card(
         _label_editor(group, labels, token, tag_options) if token is not None else ""
     )
     key_attribute = f' data-key="{html.escape(group.key)}"' if group.key else ""
+    # El recorrido solo se ofrece si hay algo que recorrer. Un grupo declarado que se
+    # quedo sin fotos propias no tendria nada que mostrar, asi que no recibe el boton.
+    browse = ""
+    if token is not None and group.photos:
+        browse = (
+            f'<button type="button" class="browse-open"'
+            f' data-browse-key="{html.escape(group.browse_key)}">Ver fotos</button>'
+        )
     # El tag viaja en la tarjeta para que el arrastre pueda leer el destino sin
     # preguntar al servidor. Vacio significa que el grupo no tiene tag.
     tag_attribute = f' data-tag="{html.escape(group.tag)}"' if group.tag else ' data-tag=""'
@@ -390,9 +412,41 @@ def _group_card(
         f'<article class="card"{key_attribute}{tag_attribute}>'
         f'<h2>{html.escape(group.title)}</h2>'
         f'<p class="meta">{html.escape(" · ".join(meta))}</p>'
+        f"{browse}"
         f"{editor}"
         f'<div class="thumbs">{thumbs}</div>'
         "</article>"
+    )
+
+
+def _browser_overlay(token: Optional[str] = None) -> str:
+    """El recorrido de fotos a pantalla completa, oculto hasta que se abre.
+
+    Es una sola pieza en el documento, no una por grupo: abrir un grupo la llena con la
+    lista que pide el servidor, asi que no hay nada que preparar antes. Se emite solo
+    cuando hay token, porque sin servidor no hay renders que pedir.
+    """
+    if token is None:
+        return ""
+    return (
+        f'<div class="browser" id="{PHOTO_BROWSER_ID}" data-token="{html.escape(token)}" hidden>'
+        '<div class="browser-bar">'
+        f'<p class="browser-title" id="{PHOTO_BROWSER_ID}-group"></p>'
+        f'<p class="browser-position" id="{PHOTO_BROWSER_ID}-position"></p>'
+        f'<button type="button" class="browser-close" id="{PHOTO_BROWSER_ID}-close">'
+        "Cerrar</button>"
+        "</div>"
+        f'<img class="browser-image" id="{PHOTO_BROWSER_ID}-image" alt="">'
+        f'<p class="browser-status" id="{PHOTO_BROWSER_ID}-status"></p>'
+        '<div class="browser-actions">'
+        f'<button type="button" class="browser-prev" id="{PHOTO_BROWSER_ID}-prev">'
+        "Anterior</button>"
+        f'<button type="button" class="browser-mark" id="{PHOTO_BROWSER_ID}-mark">'
+        "Marcar</button>"
+        f'<button type="button" class="browser-next" id="{PHOTO_BROWSER_ID}-next">'
+        "Siguiente</button>"
+        "</div>"
+        "</div>"
     )
 
 
@@ -482,6 +536,26 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .tag-error { flex: 1 0 100%; color: #e0b4b4; font-size: 12px; margin: 2px 0 0; }
 .card[draggable="true"] { cursor: grab; }
 .card.destino, .tag-section.destino { outline: 2px dashed #6f8fbf; outline-offset: 3px; }
+.browse-open { font: inherit; font-size: 12px; cursor: pointer; margin: 0 0 8px;
+               padding: 5px 10px; border-radius: 6px; border: 1px solid #3c4149;
+               background: #2c3036; color: #e8eaed; }
+.browse-open:hover { background: #363b42; }
+.browser { position: fixed; inset: 0; z-index: 50; display: flex;
+           flex-direction: column; align-items: center; gap: 12px; padding: 16px;
+           background: #0b0c0e; color: #e8eaed; }
+.browser[hidden] { display: none; }
+.browser-bar { display: flex; align-items: center; gap: 12px; width: 100%;
+               max-width: 1100px; }
+.browser-title { margin: 0; font-size: 14px; }
+.browser-position { margin: 0 auto 0 0; font-size: 13px; color: #9aa3ad; }
+.browser-image { max-width: 100%; max-height: 78vh; object-fit: contain;
+                 background: #000; }
+.browser-status { margin: 0; min-height: 1em; font-size: 12px; color: #9aa3ad; }
+.browser-actions { display: flex; gap: 10px; }
+.browser-actions button, .browser-close { font: inherit; font-size: 13px;
+             cursor: pointer; padding: 7px 14px; border-radius: 6px;
+             border: 1px solid #3c4149; background: #2c3036; color: #e8eaed; }
+.browser-mark[aria-pressed="true"] { background: #3c6e47; border-color: #4f8a5d; }
 """
 
 # Se inyecta solo en la pagina servida. El export estatico no lo lleva: sin servidor
@@ -738,6 +812,162 @@ EDIT_SCRIPT = """
       mostrarErrorTag(control, error.message);
     });
   }
+
+  // --- Recorrido de fotos de un grupo ---
+  //
+  // El token viaja en un encabezado y no en la URL, justamente para que el navegador
+  // lo mande solo en peticiones propias del visor. Eso obliga a que la imagen no venga
+  // en un `src`: se pide con fetch y se muestra como blob, porque un `src` no puede
+  // llevar el encabezado.
+
+  var browser = document.getElementById("photo-browser");
+  if (browser) {
+    var token = browser.getAttribute("data-token");
+    var imagen = document.getElementById("photo-browser-image");
+    var posicion = document.getElementById("photo-browser-position");
+    var titulo = document.getElementById("photo-browser-group");
+    var estado = document.getElementById("photo-browser-status");
+    var botonMarcar = document.getElementById("photo-browser-mark");
+    var botonPrevio = document.getElementById("photo-browser-prev");
+    var botonSiguiente = document.getElementById("photo-browser-next");
+    var botonCerrar = document.getElementById("photo-browser-close");
+
+    var lista = [];
+    var indice = 0;
+    var urlActual = null;
+
+    function soltarImagen() {
+      if (urlActual) {
+        URL.revokeObjectURL(urlActual);
+        urlActual = null;
+      }
+    }
+
+    function pintarMarca(foto) {
+      botonMarcar.setAttribute("aria-pressed", foto.marked ? "true" : "false");
+      botonMarcar.textContent = foto.marked ? "Quitar la marca" : "Marcar";
+    }
+
+    function mostrar(indiceNuevo) {
+      // En los extremos no se pasa: el recorrido se queda en la ultima o la primera
+      // foto en lugar de dar la vuelta o salirse del grupo.
+      indice = Math.max(0, Math.min(indiceNuevo, lista.length - 1));
+      var foto = lista[indice];
+      posicion.textContent = (indice + 1) + " de " + lista.length;
+      pintarMarca(foto);
+      estado.textContent = "";
+      soltarImagen();
+      fetch("/render?ref=" + encodeURIComponent(foto.ref), {
+        headers: { "X-Fotos-Plus-Token": token }
+      }).then(function (respuesta) {
+        if (!respuesta.ok) { throw new Error("No se pudo preparar la foto"); }
+        return respuesta.blob();
+      }).then(function (blob) {
+        urlActual = URL.createObjectURL(blob);
+        imagen.src = urlActual;
+      }).catch(function () {
+        estado.textContent = "No se pudo mostrar esta foto";
+      });
+    }
+
+    function abrir(clave) {
+      estado.textContent = "Cargando...";
+      fetch("/api/photos?group=" + encodeURIComponent(clave), {
+        headers: { "X-Fotos-Plus-Token": token }
+      }).then(function (respuesta) {
+        return respuesta.json().then(function (datos) {
+          if (!respuesta.ok) {
+            throw new Error(datos.error || "No se pudo abrir el grupo");
+          }
+          return datos;
+        });
+      }).then(function (datos) {
+        lista = datos.photos;
+        if (!lista.length) {
+          estado.textContent = "Este grupo no tiene fotos";
+          return;
+        }
+        titulo.textContent = datos.title;
+        browser.hidden = false;
+        mostrar(0);
+      }).catch(function (error) {
+        estado.textContent = error.message;
+      });
+    }
+
+    function cerrar() {
+      browser.hidden = true;
+      soltarImagen();
+      imagen.removeAttribute("src");
+      lista = [];
+    }
+
+    function alternarMarca() {
+      var foto = lista[indice];
+      if (!foto) { return; }
+      var marcada = !foto.marked;
+      fetch("/api/marks", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Fotos-Plus-Token": token
+        },
+        body: JSON.stringify({
+          action: marcada ? "mark" : "unmark",
+          ref: foto.ref,
+          token: token
+        })
+      }).then(function (respuesta) {
+        return respuesta.json().then(function (datos) {
+          if (!respuesta.ok) {
+            throw new Error(datos.error || "No se pudo guardar la marca");
+          }
+          return datos;
+        });
+      }).then(function (datos) {
+        // El estado cambia recien cuando el servidor confirma, y sin recargar la
+        // pagina: la respuesta trae la marca ya guardada.
+        foto.marked = datos.marked;
+        pintarMarca(foto);
+      }).catch(function (error) {
+        estado.textContent = error.message;
+      });
+    }
+
+    document.querySelectorAll(".browse-open").forEach(function (boton) {
+      boton.addEventListener("click", function () {
+        abrir(boton.getAttribute("data-browse-key"));
+      });
+    });
+
+    botonPrevio.addEventListener("click", function () { mostrar(indice - 1); });
+    botonSiguiente.addEventListener("click", function () { mostrar(indice + 1); });
+    botonMarcar.addEventListener("click", alternarMarca);
+    botonCerrar.addEventListener("click", cerrar);
+
+    function escribiendo(evento) {
+      var destino = evento.target;
+      if (!destino) { return false; }
+      return destino.tagName === "INPUT" || destino.tagName === "TEXTAREA" ||
+             destino.tagName === "SELECT" || destino.isContentEditable;
+    }
+
+    document.addEventListener("keydown", function (evento) {
+      if (browser.hidden) { return; }
+      // Escribir con el teclado es asunto de otro campo: las flechas se dejan pasar.
+      if (escribiendo(evento)) { return; }
+      if (evento.key === "ArrowLeft") {
+        evento.preventDefault();
+        mostrar(indice - 1);
+      } else if (evento.key === "ArrowRight") {
+        evento.preventDefault();
+        mostrar(indice + 1);
+      } else if (evento.key === "Escape") {
+        evento.preventDefault();
+        cerrar();
+      }
+    });
+  }
 })();
 </script>
 """
@@ -769,6 +999,7 @@ def render_html(
     token: Optional[str] = None,
     drift: Optional["LabelResolution"] = None,
     tag_options: Sequence[str] = (),
+    marked: Optional[Iterable[str]] = None,
 ) -> str:
     """Genera el documento del visor.
 
@@ -777,9 +1008,14 @@ def render_html(
     donde guardarlos. Con `token` la pagina viene con los controles de edicion.
 
     `tag_options` son los nombres del catalogo que el selector de tag ofrece.
+
+    `marked` son los hashes de las fotos marcadas. Solo se usa cuando hay token: sin
+    servidor el HTML exportado no lleva el inventario ni las marcas.
     """
     labels = labels or {}
     editable = token is not None
+    if not editable:
+        marked = None
 
     if flat:
         cards = "".join(
@@ -822,6 +1058,7 @@ def render_html(
     # El catalogo de tags solo aparece en la pagina servida: sin servidor no hay a quien
     # elegirle un tag.
     catalog = _tag_catalog(tag_options, groups) if editable else ""
+    browser = _browser_overlay(token) if editable else ""
 
     return (
         "<!doctype html>\n"
@@ -838,8 +1075,9 @@ def render_html(
         f"{_drift_notice(drift)}"
         f"{body}\n"
         f"{catalog}"
+        f"{browser}"
         '<script type="application/json" id="viewer-data">'
-        f"{json.dumps(_payload(groups, root, flat), ensure_ascii=False)}"
+        f"{json.dumps(_payload(groups, root, flat, marked), ensure_ascii=False)}"
         "</script>\n"
         f"{script}"
         "</body>\n"
@@ -847,20 +1085,43 @@ def render_html(
     )
 
 
-def _payload(groups: list[Group], root: str, flat: bool) -> dict:
+def _payload(
+    groups: list[Group], root: str, flat: bool, marked: Optional[Iterable[str]] = None
+) -> dict:
+    """Los datos que el visor embebe en la pagina.
+
+    Sin servidor la pagina es un documento para leer: se lleva lo que describe las
+    tarjetas y nada mas. Servida, cada grupo ademas trae su referencia y cuantas fotos
+    tiene marcadas, que es lo que la tarjeta necesita para abrir el recorrido sin
+    tener que preguntar antes. Las fotos sueltas no van aqui, se piden por grupo.
+    """
+    if marked is None:
+        marks: frozenset = frozenset()
+        served = False
+    else:
+        marks = frozenset(marked)
+        served = True
+
+    payload_groups = []
+    for group in groups:
+        entry = {
+            "title": group.title,
+            "kind": group.kind,
+            "photo_count": group.photo_count,
+            "first_captured_at": group.first_captured_at,
+            "last_captured_at": group.last_captured_at,
+            "country": group.country,
+        }
+        if served:
+            entry["browse_key"] = group.browse_key
+            entry["marked_count"] = sum(
+                1 for photo in group.photos if photo.sha256 in marks
+            )
+        payload_groups.append(entry)
+
     return {
         "flat": flat,
-        "groups": [
-            {
-                "title": group.title,
-                "kind": group.kind,
-                "photo_count": group.photo_count,
-                "first_captured_at": group.first_captured_at,
-                "last_captured_at": group.last_captured_at,
-                "country": group.country,
-            }
-            for group in groups
-        ],
+        "groups": payload_groups,
     }
 
 

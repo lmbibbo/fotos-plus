@@ -1,22 +1,39 @@
+"""The edition file: what the user wrote, stored next to the index.
+
+It holds four things, and they are separate axes. Three name or classify groups and are
+keyed by the group's earliest date: `labels` gives it a name, `tagged` assigns it a tag, and
+`tags` is the catalogue those tags are chosen from. The fourth, `marked`, does not name
+groups at all: it marks individual photos and is stored as a flat list of content hashes, so
+that it survives the photo being moved to another folder.
+
+The file has a single writer, the editor, and is written atomically. Earlier versions are
+still readable and are migrated in memory when read.
+"""
+
 from __future__ import annotations
 
 import json
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from .index import write_json_atomic
 from .models import SuggestionsResult
 
-EDITION_VERSION = 2
+EDITION_VERSION = 3
 
-# La version 1 solo tenia `labels`. Se sigue leyendo para no dejar de servir los archivos
-# ya guardados, y se migra a la vigente en memoria, sin reescribir el archivo todavia.
-SUPPORTED_EDITIONS = (1, 2)
+# Version 1 only had `labels`. Version 2 added the tag catalogue and the assignments.
+# Version 3 adds `marked`, the photos the user kept. Earlier versions are still read and
+# migrated to the current one in memory, without rewriting the file yet.
+SUPPORTED_EDITIONS = (1, 2, 3)
 
 EMPTY_LABEL_ERROR = "una etiqueta no puede estar vacia"
 EMPTY_TAG_ERROR = "un tag no puede estar vacio"
+MARK_SHAPE_ERROR = "una marca tiene que ser 64 caracteres hexadecimales en minuscula"
+
+MARK_LENGTH = 64
+_HEX_DIGITS = set("0123456789abcdef")
 
 
 class LabelError(Exception):
@@ -56,24 +73,44 @@ def _tag_identity(value: str) -> str:
     return value.strip().casefold()
 
 
+def _clean_mark(value: object) -> str:
+    """Validates a photo mark and returns the hash exactly as it is stored.
+
+    A mark is the content hash of the photo, always lowercase because that is what the
+    scanner produces. That exact shape is required so one photo cannot end up recorded
+    twice under two different spellings.
+    """
+    if not isinstance(value, str):
+        raise LabelError(MARK_SHAPE_ERROR)
+    if len(value) != MARK_LENGTH or not set(value) <= _HEX_DIGITS:
+        raise LabelError(MARK_SHAPE_ERROR)
+    return value
+
+
 @dataclass
 class LabelOverlay:
-    """Etiquetas y tags escritos por el usuario, indexados por la fecha mas temprana del grupo.
+    """What the user wrote, held in the edition file.
 
-    La clave es `first_captured_at` del grupo, que es el mismo dato que el visor ya
-    usa para ordenar las tarjetas. Es unica entre los grupos porque el escaneo reparte
-    las fotos sin solaparse: cada grupo arranca en una foto distinta.
+    `labels` names a group, `tagged` classifies it, and `tags` is the catalogue those names
+    are chosen from. All three are keyed by the group's earliest date, which is the same
+    value the viewer already uses to order the cards and is unique among groups because the
+    scanner hands out photos without overlap.
 
-    `labels` nombra un grupo y `tagged` lo clasifica. Son ejes separados: un grupo puede
-    tener las dos cosas a la vez, y cada una puede faltar. `tags` es el catalogo de nombres
-    que el usuario puede elegir, en el orden en que los fue creando; `tagged` solo puede
-    usar nombres que esten en el catalogo.
+    `marked` is the fourth axis and is not keyed by group: it is a flat list of photo
+    content hashes. It marks the photo rather than the group, so it survives the photo
+    moving folder and survives the derived group changing. Saving a label or a tag does
+    not touch it.
     """
 
     based_on_scanned_at: Optional[str] = None
     labels: dict[str, str] = field(default_factory=dict)
     tags: list[str] = field(default_factory=list)
     tagged: dict[str, str] = field(default_factory=dict)
+    marked: list[str] = field(default_factory=list)
+
+    def is_marked(self, sha256: str) -> bool:
+        """Whether that photo is marked."""
+        return sha256 in self.marked
 
     def title_for(self, key: str) -> Optional[str]:
         """Etiqueta vigente para una referencia, o None si el grupo no tiene."""
@@ -106,6 +143,7 @@ class LabelOverlay:
             "labels": dict(sorted(self.labels.items())),
             "tags": list(self.tags),
             "tagged": dict(sorted(self.tagged.items())),
+            "marked": sorted(self.marked),
         }
 
     @classmethod
@@ -132,18 +170,39 @@ class LabelOverlay:
         if based_on is not None and not isinstance(based_on, str):
             raise LabelError("'based_on_scanned_at' del archivo de edicion no es texto")
 
-        # Un archivo v1 no trae `tags` ni `tagged`. Se migra en memoria a la estructura
-        # vigente con el catalogo y las asignaciones vacios, y el archivo pasa a v2 la
-        # primera vez que el usuario guarda algo. No se reescribe al solo leerlo.
+        # A v1 file has no `tags` nor `tagged`, and a v2 file has no `marked`. Each is
+        # migrated in memory to the current shape with whatever is missing empty, and the
+        # file is written at the current version the first time the user saves anything.
+        # Reading it never rewrites it.
         tags = cls._read_tags(data.get("tags"))
         tagged = cls._read_tagged(data.get("tagged"), tags)
+        marked = cls._read_marked(data.get("marked"))
 
         return cls(
             based_on_scanned_at=based_on,
             labels=labels,
             tags=tags,
             tagged=tagged,
+            marked=marked,
         )
+
+    @staticmethod
+    def _read_marked(raw: object) -> list[str]:
+        """The marks, validated: complete lowercase hashes only, no duplicates."""
+        if raw is None:
+            return []
+        if not isinstance(raw, list):
+            raise LabelError("'marked' del archivo de edicion no es una lista JSON")
+
+        marked: list[str] = []
+        seen: set[str] = set()
+        for value in raw:
+            cleaned = _clean_mark(value)
+            if cleaned in seen:
+                continue
+            seen.add(cleaned)
+            marked.append(cleaned)
+        return sorted(marked)
 
     @staticmethod
     def _read_tags(raw: object) -> list[str]:
@@ -206,14 +265,15 @@ def read_edicion(path: Path) -> LabelOverlay:
 def write_edicion(overlay: LabelOverlay, path: Path) -> Path:
     """Escribe el archivo de edicion de forma atomica.
 
-    Se vuelven a validar las etiquetas y los tags antes de escribir: el archivo tambien
-    puede venir editado a mano, y no debe quedar guardada una etiqueta vacia ni una
-    asignacion a un tag que no esta en el catalogo.
+    Se vuelven a validar las etiquetas, los tags y las marcas antes de escribir: el archivo
+    tambien puede venir editado a mano, y no debe quedar guardada una etiqueta vacia, una
+    asignacion a un tag que no esta en el catalogo ni una marca mal formada.
     """
     for value in overlay.labels.values():
         _clean_text(value)
     LabelOverlay._read_tags(list(overlay.tags))
     LabelOverlay._read_tagged(dict(overlay.tagged), list(overlay.tags))
+    LabelOverlay._read_marked(list(overlay.marked))
     return write_json_atomic(overlay.to_dict(), path)
 
 
@@ -355,6 +415,7 @@ def set_label(
         labels=labels,
         tags=list(overlay.tags),
         tagged=dict(overlay.tagged),
+        marked=list(overlay.marked),
     )
 
 
@@ -377,6 +438,7 @@ def remove_label(overlay: LabelOverlay, key: object) -> LabelOverlay:
         labels=labels,
         tags=list(overlay.tags),
         tagged=dict(overlay.tagged),
+        marked=list(overlay.marked),
     )
 
 
@@ -430,6 +492,7 @@ def set_tag(
         labels=dict(overlay.labels),
         tags=tags,
         tagged=tagged,
+        marked=list(overlay.marked),
     )
 
 
@@ -452,4 +515,53 @@ def clear_tag(overlay: LabelOverlay, key: object) -> LabelOverlay:
         labels=dict(overlay.labels),
         tags=list(overlay.tags),
         tagged=tagged,
+        marked=list(overlay.marked),
     )
+
+
+def mark_photo(overlay: LabelOverlay, sha256: object) -> LabelOverlay:
+    """Returns a new overlay with the photo marked. Does not mutate the overlay it got.
+
+    Marking a photo that was already marked does not duplicate it: it is the same
+    operation, which is why it can be applied again without checking anything first.
+    """
+    cleaned = _clean_mark(sha256)
+    marked = set(overlay.marked)
+    marked.add(cleaned)
+    return _with_marked(overlay, marked)
+
+
+def unmark_photo(overlay: LabelOverlay, sha256: object) -> LabelOverlay:
+    """Returns a new overlay without that mark. Does not mutate the overlay it got.
+
+    Unmarking a photo that carries no mark is not an error: it is the same gesture, and it
+    does not have to read the current state to decide what to do.
+    """
+    cleaned = _clean_mark(sha256)
+    marked = set(overlay.marked)
+    marked.discard(cleaned)
+    return _with_marked(overlay, marked)
+
+
+def _with_marked(overlay: LabelOverlay, marked: set[str]) -> LabelOverlay:
+    return LabelOverlay(
+        based_on_scanned_at=overlay.based_on_scanned_at,
+        labels=dict(overlay.labels),
+        tags=list(overlay.tags),
+        tagged=dict(overlay.tagged),
+        marked=sorted(marked),
+    )
+
+
+def prune_marked(overlay: LabelOverlay, known_hashes: Iterable[str]) -> LabelOverlay:
+    """Drops from memory the marks of photos the index no longer has.
+
+    It does not rewrite the file: the mark stays stored in case the photo comes back,
+    which is what happens when a drive is disconnected. It just stops being counted so it
+    can be shown.
+    """
+    known = set(known_hashes)
+    kept = [value for value in overlay.marked if value in known]
+    if len(kept) == len(overlay.marked):
+        return overlay
+    return _with_marked(overlay, set(kept))

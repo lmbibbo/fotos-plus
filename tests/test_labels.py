@@ -18,11 +18,14 @@ from fotos_plus.labels import (
     LabelError,
     LabelOverlay,
     clear_tag,
+    mark_photo,
+    prune_marked,
     read_edicion,
     remove_label,
     resolve_labels,
     set_label,
     set_tag,
+    unmark_photo,
     validate_label,
     write_edicion,
 )
@@ -468,9 +471,10 @@ def test_new_overlay_serializes_tags_and_tagged() -> None:
     data = overlay.to_dict()
 
     assert data["version"] == EDITION_VERSION
-    assert data["version"] == 2
+    assert data["version"] == 3
     assert data["tags"] == ["Viaje", "Familia"]
     assert data["tagged"] == {"2024-05-01T00:00:00": "Familia"}
+    assert data["marked"] == []
 
 
 def test_reads_a_v1_file_and_keeps_its_labels(tmp_path: Path) -> None:
@@ -495,7 +499,9 @@ def test_reads_a_v1_file_and_keeps_its_labels(tmp_path: Path) -> None:
     assert json.loads(path.read_text(encoding="utf-8"))["version"] == 1
 
 
-def test_a_v1_file_is_written_as_v2_on_the_next_save(tmp_path: Path) -> None:
+def test_an_older_file_is_written_as_the_current_version_on_the_next_save(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "x-edicion.json"
     path.write_text(
         json.dumps({"version": 1, "labels": {"2024-05-01T00:00:00": "Bariloche"}}),
@@ -513,7 +519,7 @@ def test_a_v1_file_is_written_as_v2_on_the_next_save(tmp_path: Path) -> None:
     )
 
     saved = json.loads(path.read_text(encoding="utf-8"))
-    assert saved["version"] == 2
+    assert saved["version"] == EDITION_VERSION
     assert saved["labels"] == {"2024-05-01T00:00:00": "Bariloche"}
 
 
@@ -806,3 +812,272 @@ def test_a_dangling_tag_alone_marks_the_overlay_as_drifted() -> None:
     )
 
     assert resolve_labels(orphan, groups).drifted is True
+
+
+# --- marcas de fotos -------------------------------------------------------
+
+HASH_A = "a" * 64
+HASH_B = "b" * 64
+HASH_C = "c" * 64
+
+
+def test_a_v2_file_loads_with_no_marks_and_is_not_rewritten(tmp_path: Path) -> None:
+    """An already-saved v2 file still reads the same, with empty marks and untouched on disk."""
+    path = tmp_path / "x-edicion.json"
+    original = {
+        "version": 2,
+        "based_on_scanned_at": "2026-01-01T00:00:00",
+        "labels": {"2024-05-01T00:00:00": "Bariloche"},
+        "tags": ["Familia"],
+        "tagged": {"2024-05-01T00:00:00": "Familia"},
+    }
+    path.write_text(json.dumps(original), encoding="utf-8")
+
+    overlay = read_edicion(path)
+
+    assert overlay.labels == {"2024-05-01T00:00:00": "Bariloche"}
+    assert overlay.tags == ["Familia"]
+    assert overlay.tagged == {"2024-05-01T00:00:00": "Familia"}
+    assert overlay.marked == []
+    assert json.loads(path.read_text(encoding="utf-8")) == original
+
+
+def test_a_v1_file_loads_with_no_marks(tmp_path: Path) -> None:
+    path = tmp_path / "x-edicion.json"
+    path.write_text(
+        json.dumps({"version": 1, "labels": {"2024-05-01T00:00:00": "Bariloche"}}),
+        encoding="utf-8",
+    )
+
+    overlay = read_edicion(path)
+
+    assert overlay.labels == {"2024-05-01T00:00:00": "Bariloche"}
+    assert overlay.marked == []
+
+
+def test_the_first_mark_writes_version_3_and_keeps_the_tags(tmp_path: Path) -> None:
+    path = tmp_path / "x-edicion.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "tags": ["Familia"],
+                "tagged": {"2024-05-01T00:00:00": "Familia"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    overlay = read_edicion(path)
+
+    write_edicion(mark_photo(overlay, HASH_A), path)
+
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["version"] == 3
+    assert saved["marked"] == [HASH_A]
+    assert saved["tags"] == ["Familia"]
+    assert saved["tagged"] == {"2024-05-01T00:00:00": "Familia"}
+
+
+def test_marks_are_stored_sorted_and_without_duplicates(tmp_path: Path) -> None:
+    overlay = LabelOverlay(marked=[HASH_C, HASH_A, HASH_B])
+
+    data = overlay.to_dict()
+
+    assert data["marked"] == sorted([HASH_A, HASH_B, HASH_C])
+
+
+def test_a_repeated_mark_is_not_duplicated_on_read(tmp_path: Path) -> None:
+    path = tmp_path / "x-edicion.json"
+    path.write_text(
+        json.dumps({"version": 3, "marked": [HASH_A, HASH_A, HASH_B]}),
+        encoding="utf-8",
+    )
+
+    overlay = read_edicion(path)
+
+    assert overlay.marked == [HASH_A, HASH_B]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "corta",
+        HASH_A.upper(),
+        HASH_A + "a",
+        "z" * 64,
+        42,
+        None,
+    ],
+)
+def test_rejects_a_mark_that_is_not_a_lowercase_sha256(bad: object) -> None:
+    with pytest.raises(LabelError):
+        mark_photo(LabelOverlay(), bad)
+
+
+def test_write_edicion_refuses_to_save_a_malformed_mark(tmp_path: Path) -> None:
+    path = tmp_path / "x-edicion.json"
+    path.write_text(
+        json.dumps({"version": 3, "marked": [HASH_A]}), encoding="utf-8"
+    )
+
+    with pytest.raises(LabelError):
+        write_edicion(LabelOverlay(marked=[HASH_A, "no-es-un-hash"]), path)
+
+    assert json.loads(path.read_text(encoding="utf-8"))["marked"] == [HASH_A]
+
+
+def test_marking_and_unmarking_are_symmetric_toggles() -> None:
+    overlay = LabelOverlay()
+
+    marked = mark_photo(overlay, HASH_A)
+    assert marked.is_marked(HASH_A) is True
+
+    unmarked = unmark_photo(marked, HASH_A)
+    assert unmarked.marked == []
+
+
+def test_marking_twice_keeps_one_mark() -> None:
+    once = mark_photo(LabelOverlay(), HASH_A)
+
+    twice = mark_photo(once, HASH_A)
+
+    assert twice.marked == [HASH_A]
+
+
+def test_unmarking_a_photo_without_a_mark_is_not_an_error() -> None:
+    overlay = LabelOverlay(marked=[HASH_A])
+
+    result = unmark_photo(overlay, HASH_B)
+
+    assert result.marked == [HASH_A]
+
+
+def test_marking_does_not_mutate_the_overlay_it_receives() -> None:
+    overlay = LabelOverlay(marked=[HASH_A])
+
+    marked = mark_photo(overlay, HASH_B)
+
+    assert overlay.marked == [HASH_A]
+    assert marked.marked == [HASH_A, HASH_B]
+
+
+def test_a_marked_and_unmarked_photo_leaves_no_trace() -> None:
+    """No record is left of having reviewed it: a mark is state, not history."""
+    overlay = mark_photo(LabelOverlay(), HASH_A)
+
+    result = unmark_photo(overlay, HASH_A)
+
+    assert result.to_dict()["marked"] == []
+    assert result.is_marked(HASH_A) is False
+
+
+def test_the_same_content_in_two_places_shares_one_mark() -> None:
+    """The hash identifies content, not a file."""
+    overlay = mark_photo(LabelOverlay(), HASH_A)
+
+    assert overlay.is_marked(HASH_A) is True
+    assert overlay.marked == [HASH_A]
+
+
+def test_marks_survive_saving_a_label() -> None:
+    groups = _groups("2024-05-01T00:00:00")
+    overlay = mark_photo(LabelOverlay(), HASH_A)
+
+    result = set_label(overlay, groups, "2024-05-01T00:00:00", "Bariloche")
+
+    assert result.marked == [HASH_A]
+    assert result.labels == {"2024-05-01T00:00:00": "Bariloche"}
+
+
+def test_marks_survive_removing_a_label() -> None:
+    overlay = LabelOverlay(
+        labels={"2024-05-01T00:00:00": "Bariloche"}, marked=[HASH_A]
+    )
+
+    result = remove_label(overlay, "2024-05-01T00:00:00")
+
+    assert result.marked == [HASH_A]
+    assert result.labels == {}
+
+
+def test_marks_survive_assigning_a_tag() -> None:
+    groups = _groups("2024-05-01T00:00:00")
+    overlay = mark_photo(LabelOverlay(), HASH_A)
+
+    result = set_tag(overlay, groups, "2024-05-01T00:00:00", "Familia")
+
+    assert result.marked == [HASH_A]
+    assert result.tagged == {"2024-05-01T00:00:00": "Familia"}
+
+
+def test_marks_survive_clearing_a_tag() -> None:
+    overlay = LabelOverlay(
+        tags=["Familia"], tagged={"2024-05-01T00:00:00": "Familia"}, marked=[HASH_A]
+    )
+
+    result = clear_tag(overlay, "2024-05-01T00:00:00")
+
+    assert result.marked == [HASH_A]
+    assert result.tagged == {}
+
+
+def test_every_edition_operation_keeps_the_marks() -> None:
+    """One test walking all four operations: this is the failure that does not announce itself.
+
+    The four setters rebuild the overlay by naming every field by hand. If one
+    forgets `marked`, nothing raises: the marks are just lost the next time the user
+    retags a card.
+    """
+    groups = _groups("2024-05-01T00:00:00")
+    overlay = LabelOverlay(
+        labels={"2024-05-01T00:00:00": "Bariloche"},
+        tags=["Familia"],
+        tagged={"2024-05-01T00:00:00": "Familia"},
+        marked=[HASH_A, HASH_B],
+    )
+
+    steps = [
+        set_label(overlay, groups, "2024-05-01T00:00:00", "Navidad"),
+        remove_label(overlay, "2024-05-01T00:00:00"),
+        set_tag(overlay, groups, "2024-05-01T00:00:00", "Viaje"),
+        clear_tag(overlay, "2024-05-01T00:00:00"),
+    ]
+
+    for step in steps:
+        assert step.marked == [HASH_A, HASH_B]
+
+
+def test_prune_drops_marks_the_index_no_longer_has() -> None:
+    overlay = LabelOverlay(marked=[HASH_A, HASH_B])
+
+    result = prune_marked(overlay, [HASH_A])
+
+    assert result.marked == [HASH_A]
+
+
+def test_prune_does_not_rewrite_the_file(tmp_path: Path) -> None:
+    """The mark stays stored: if the photo comes back, the mark is there."""
+    path = tmp_path / "x-edicion.json"
+    path.write_text(
+        json.dumps({"version": 3, "marked": [HASH_A, HASH_B]}), encoding="utf-8"
+    )
+    overlay = read_edicion(path)
+
+    prune_marked(overlay, [HASH_A])
+
+    assert json.loads(path.read_text(encoding="utf-8"))["marked"] == [HASH_A, HASH_B]
+
+
+def test_prune_keeps_everything_that_resolves() -> None:
+    overlay = LabelOverlay(marked=[HASH_A, HASH_B])
+
+    result = prune_marked(overlay, [HASH_A, HASH_B, HASH_C])
+
+    assert result.marked == [HASH_A, HASH_B]
+
+
+def test_prune_of_an_empty_index_empties_the_marks() -> None:
+    result = prune_marked(LabelOverlay(marked=[HASH_A]), [])
+
+    assert result.marked == []

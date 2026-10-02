@@ -21,6 +21,13 @@ HASH_CHUNK_SIZE = 1024 * 1024
 THUMBNAIL_SIZE = 200
 THUMBNAIL_QUALITY = 70
 
+# The screen render is asked for far more often than the thumbnail and is far smaller than
+# the original file: in the reference library originals reach 13.8 MB at 8160x6144, and the
+# same file at 2000px weighs 457 KB. Past that point the render's size stops depending on the
+# original's, which is what makes browsing possible at all.
+RENDER_SIZE = 2000
+RENDER_QUALITY = 82
+
 EXIF_IFD_TAG = 0x8769
 EXIF_TAG_DATETIME_ORIGINAL = 0x9003
 EXIF_TAG_DATETIME = 0x0132
@@ -195,3 +202,45 @@ def make_thumbnail(path: Path) -> bytes:
             return buffer.getvalue()
     except (UnidentifiedImageError, OSError, ValueError) as error:
         raise PhotoError(f"cannot read image: {error}") from error
+
+
+def make_render(path: Path) -> bytes:
+    """Generates the screen-sized JPEG render of the photo, with orientation already applied.
+
+    Like the thumbnail, it applies the EXIF transform before reducing so the image comes out
+    with the proportion the photo actually has and the viewer never has to interpret the
+    orientation tag. The longest edge ends up at `RENDER_SIZE`.
+    """
+    try:
+        with Image.open(path) as image:
+            image = ImageOps.exif_transpose(image)
+            image.thumbnail((RENDER_SIZE, RENDER_SIZE))
+            if image.mode not in ("RGB", "L"):
+                image = image.convert("RGB")
+            buffer = BytesIO()
+            image.save(buffer, format="JPEG", quality=RENDER_QUALITY)
+            return buffer.getvalue()
+    except (UnidentifiedImageError, OSError, ValueError) as error:
+        raise PhotoError(f"cannot read image: {error}") from error
+
+
+def cached_render(photo_path: Path, sha256: str, render_path: Path) -> bytes:
+    """Returns the photo's screen render, producing it only if it is not stored yet.
+
+    The render is identified by the content hash rather than by the file's path: a photo
+    that moves folder still reuses the render already made, and a photo whose content
+    changed gets a different hash so a stale render can never be served. The directory is
+    created the first time it is needed and everything inside it is disposable.
+    """
+    render_path = Path(render_path)
+    if render_path.is_file():
+        return render_path.read_bytes()
+    data = make_render(photo_path)
+    try:
+        render_path.parent.mkdir(parents=True, exist_ok=True)
+        render_path.write_bytes(data)
+    except OSError:
+        # The cache is an optimisation. If it cannot be written, hand back the render just
+        # produced instead of failing: the only thing lost is the reuse.
+        return data
+    return data
