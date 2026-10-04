@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,7 @@ from fotos_plus.viewer import (
     UNTAGGED_SECTION_TITLE,
     assign_groups,
     group_sections,
+    render_html,
 )
 
 
@@ -915,3 +918,310 @@ def test_the_read_only_export_has_no_drag_or_tag_controls(tmp_path: Path) -> Non
     assert '<section class="tag-section"' in document
     assert 'data-tag="Viaje"' in document
     assert "solo lectura" in document
+
+
+# --- 4.2 el inventario solo viaja en la pagina servida ------------------------
+
+
+def _embedded_payload(document: str) -> dict:
+    return json.loads(re.search(r'id="viewer-data">(.*?)</script>', document, re.S).group(1))
+
+
+def test_the_served_payload_carries_the_reference_of_every_group(tmp_path: Path) -> None:
+    from fotos_plus.viewer import render_html
+
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+    groups = assign_groups(
+        [photo("a.jpg", "2024-01-01T00:00:00"), photo("b.jpg", "2024-07-01T00:00:00")],
+        suggestions(
+            trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")],
+            periods=[period("2024-07-01T00:00:00", "2024-07-02T00:00:00")],
+        ),
+    )
+
+    document = render_html(groups, str(root), token="secreto", marked=[])
+    data = _embedded_payload(document)
+
+    assert [g["browse_key"] for g in data["groups"]] == [
+        "2024-01-01T00:00:00",
+        "2024-07-01T00:00:00",
+    ]
+
+
+def test_the_served_payload_carries_the_mark_count_of_every_group(tmp_path: Path) -> None:
+    from fotos_plus.viewer import render_html
+
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg", "c.jpg"])
+    marked = [photo("b.jpg", "2024-07-01T00:00:00").sha256]
+    groups = assign_groups(
+        [
+            photo("a.jpg", "2024-01-01T00:00:00"),
+            photo("b.jpg", "2024-07-01T00:00:00"),
+            photo("c.jpg", "2024-07-02T00:00:00"),
+        ],
+        suggestions(
+            trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")],
+            periods=[period("2024-07-01T00:00:00", "2024-07-02T00:00:00")],
+        ),
+    )
+
+    document = render_html(groups, str(root), token="secreto", marked=marked)
+    data = _embedded_payload(document)
+
+    counts = {g["browse_key"]: g["marked_count"] for g in data["groups"]}
+    assert counts == {"2024-01-01T00:00:00": 0, "2024-07-01T00:00:00": 1}
+
+
+def test_the_exported_payload_carries_no_inventory(tmp_path: Path) -> None:
+    """El export no tiene a quien preguntar, asi que no lleva referencias ni marcas."""
+    from fotos_plus.viewer import render_html
+
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+    groups = assign_groups(
+        [photo("a.jpg", "2024-01-01T00:00:00")],
+        suggestions(trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")]),
+    )
+
+    document = render_html(groups, str(root))
+    data = _embedded_payload(document)
+
+    assert all("browse_key" not in g for g in data["groups"])
+    assert all("marked_count" not in g for g in data["groups"])
+
+
+def test_passing_marks_without_a_token_still_exports_no_inventory(tmp_path: Path) -> None:
+    from fotos_plus.viewer import render_html
+
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+    groups = assign_groups(
+        [photo("a.jpg", "2024-01-01T00:00:00")],
+        suggestions(trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")]),
+    )
+
+    document = render_html(groups, str(root), token=None, marked=["x" * 64])
+    data = _embedded_payload(document)
+
+    assert all("browse_key" not in g for g in data["groups"])
+
+
+def test_the_unclassified_group_gets_a_reserved_reference() -> None:
+    """El grupo de fotos sin clasificar tambien se puede recorrer."""
+    from fotos_plus.viewer import UNCLASSIFIED_GROUP_KEY
+
+    groups = assign_groups(
+        [photo("suelta.jpg", "2024-03-01T00:00:00")],
+        suggestions(trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")]),
+    )
+
+    orphans = [g for g in groups if g.kind == "orphan"]
+    assert len(orphans) == 1
+    assert orphans[0].key is None
+    assert orphans[0].browse_key == UNCLASSIFIED_GROUP_KEY
+
+
+def test_a_served_photo_list_does_not_grow_the_page(tmp_path: Path) -> None:
+    """Las fotos sueltas no se embeben: se piden por grupo."""
+    from fotos_plus.viewer import render_html
+
+    root = tmp_path / "fotos"
+    names = [f"{i:03}.jpg" for i in range(40)]
+    _write_photos(root, names)
+    groups = assign_groups(
+        [photo(n, "2024-01-01T00:00:00") for n in names],
+        suggestions(trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")]),
+    )
+
+    document = render_html(groups, str(root), token="secreto", marked=[])
+    payload = re.search(r'id="viewer-data">(.*?)</script>', document, re.S).group(1)
+
+    for name in names:
+        assert name not in payload
+
+
+# --- 5. recorrido de fotos a pantalla completa --------------------------------
+
+
+def _browser_html(root: Path, names: list[str], token: str | None = "t0ken") -> str:
+    return render_html(
+        assign_groups(
+            [photo(n, "2024-01-01T00:00:00") for n in names],
+            suggestions(trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")]),
+        ),
+        str(root),
+        token=token,
+        marked=[],
+    )
+
+
+def test_a_card_with_photos_offers_the_browser(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _browser_html(root, ["a.jpg"])
+
+    assert '<button type="button" class="browse-open"' in document
+    assert 'data-browse-key="2024-01-01T00:00:00"' in document
+
+
+def test_a_card_with_no_photos_has_no_browser_button(tmp_path: Path) -> None:
+    """Un grupo declarado que se quedo sin fotos no ofrece un recorrido vacio."""
+    root = tmp_path / "fotos"
+    _write_photos(root, [])
+    groups = assign_groups(
+        [],
+        suggestions(trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")]),
+    )
+
+    document = render_html(groups, str(root), token="t0ken", marked=[])
+
+    assert '<button type="button" class="browse-open"' not in document
+    assert 'id="photo-browser"' in document
+
+
+def test_the_unclassified_group_offers_the_browser(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["suelta.jpg"])
+    groups = assign_groups(
+        [photo("suelta.jpg", "2024-03-01T00:00:00")],
+        suggestions(trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")]),
+    )
+
+    document = render_html(groups, str(root), token="t0ken", marked=[])
+
+    assert 'data-browse-key="sin-clasificar"' in document
+
+
+def test_the_browser_is_hidden_until_it_opens(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _browser_html(root, ["a.jpg"])
+
+    assert '<div class="browser" id="photo-browser"' in document
+    assert 'data-token="t0ken"' in document
+    assert re.search(r'id="photo-browser"[^>]*\shidden', document)
+
+
+def test_the_browser_shows_its_place_inside_the_group(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _browser_html(root, ["a.jpg", "b.jpg"])
+
+    assert 'id="photo-browser-position"' in document
+    assert '(indice + 1) + " de " + lista.length' in document
+
+
+def test_the_browser_asks_the_server_for_the_photo(tmp_path: Path) -> None:
+    """La imagen no puede ir en un `src`: el token viaja en un encabezado."""
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _browser_html(root, ["a.jpg"])
+
+    assert 'fetch("/render?ref=" + encodeURIComponent(foto.ref)' in document
+    assert '"X-Fotos-Plus-Token": token' in document
+    assert "URL.createObjectURL(blob)" in document
+    assert "URL.revokeObjectURL(urlActual)" in document
+
+
+def test_the_browser_has_both_directions(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _browser_html(root, ["a.jpg", "b.jpg"])
+
+    assert 'id="photo-browser-prev"' in document
+    assert 'id="photo-browser-next"' in document
+    assert "mostrar(indice - 1)" in document
+    assert "mostrar(indice + 1)" in document
+
+
+def test_the_browser_stops_at_the_ends_instead_of_wrapping(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _browser_html(root, ["a.jpg", "b.jpg"])
+
+    assert "Math.max(0, Math.min(indiceNuevo, lista.length - 1))" in document
+
+
+def test_the_browser_binds_the_keyboard_in_both_directions(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _browser_html(root, ["a.jpg", "b.jpg"])
+
+    assert 'evento.key === "ArrowLeft"' in document
+    assert 'evento.key === "ArrowRight"' in document
+
+
+def test_the_browser_leaves_the_keys_alone_while_typing(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _browser_html(root, ["a.jpg"])
+
+    assert 'destino.tagName === "INPUT"' in document
+    assert 'destino.tagName === "TEXTAREA"' in document
+    assert "destino.isContentEditable" in document
+    assert "if (escribiendo(evento)) { return; }" in document
+
+
+def test_the_browser_shows_whether_the_photo_is_marked(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _browser_html(root, ["a.jpg"])
+
+    assert 'id="photo-browser-mark"' in document
+    assert 'botonMarcar.setAttribute("aria-pressed"' in document
+    assert 'foto.marked ? "Quitar la marca" : "Marcar"' in document
+    # el estado se vuelve a pintar en cada foto, para que al mover se vea el de esa
+    assert "pintarMarca(foto);" in document
+
+
+def test_the_mark_updates_without_reloading(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _browser_html(root, ["a.jpg"])
+
+    assert 'fetch("/api/marks"' in document
+    assert 'action: marcada ? "mark" : "unmark"' in document
+    assert "foto.marked = datos.marked;" in document
+    assert "window.location.reload()" not in document.split("photo-browser")[-1]
+
+
+def test_closing_the_browser_touches_no_mark(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _browser_html(root, ["a.jpg", "b.jpg"])
+
+    # cerrar solo esconde y suelta la imagen: no manda nada al servidor
+    assert "function cerrar()" in document
+    assert "browser.hidden = true;" in document
+    assert 'evento.key === "Escape"' in document
+    cerrar = document.split("function cerrar()")[1].split("}")[0]
+    assert "fetch(" not in cerrar
+    assert "marcar" not in cerrar.lower()
+
+
+def test_the_exported_html_has_no_browser(tmp_path: Path) -> None:
+    """El export no lleva el recorrido: sin servidor no hay renders que pedir."""
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _browser_html(root, ["a.jpg", "b.jpg"], token=None)
+
+    assert 'id="photo-browser"' not in document
+    assert '<button type="button" class="browse-open"' not in document
+    assert "/render?ref=" not in document
+    assert "/api/photos" not in document
+    assert "/api/marks" not in document
+    assert "<script>" not in document

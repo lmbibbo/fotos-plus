@@ -12,6 +12,7 @@ from .models import ScanResult, SuggestionsResult
 
 SUGGESTIONS_SUFFIX = "-sugerencias"
 EDITION_SUFFIX = "-edicion"
+RENDERS_SUFFIX = "-renders"
 
 
 def state_dir() -> Path:
@@ -65,6 +66,24 @@ def edicion_path_next_to(index_path: Path) -> Path:
     """
     index_path = Path(index_path)
     return index_path.parent / f"{index_path.stem}{EDITION_SUFFIX}.json"
+
+
+def renders_dir_next_to(index_path: Path) -> Path:
+    """Directory of screen-sized renders, next to the index.
+
+    It is a directory rather than a file because it holds one render per photo. It sits
+    beside the index it was derived from and every entry is named after the photo's content
+    hash, not its filename: that way it survives the photo moving folder and cannot go
+    stale when the file changes. Everything inside is disposable; deleting it costs the
+    time to produce the renders again and nothing else.
+    """
+    index_path = Path(index_path)
+    return index_path.parent / f"{index_path.stem}{RENDERS_SUFFIX}"
+
+
+def render_path_for(renders_dir: Path, sha256: str) -> Path:
+    """Path of the screen render for the photo with that content hash."""
+    return Path(renders_dir) / f"{sha256}.jpg"
 
 
 def default_index_path(root: Path) -> Path:
