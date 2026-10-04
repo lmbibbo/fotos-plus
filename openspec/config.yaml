@@ -15,15 +15,18 @@ context: |
   - El resultado del archive se commitea en la misma rama, junto con el
     código y los tests.
   - La rama se pushea y se abre un PR contra `main` conteniendo todo el cambio.
+  Idioma:
+  - El usuario escribe en español; el agente responde SIEMPRE en inglés.
+  - Esto aplica al chat, a los comentarios en el código, a los mensajes de
+    commit y a cualquier artefacto generado (proposal, design, specs, tasks).
+  - Lo previamente generado en español (como este archivo) no se traduce, 
+    pero se puede usar como referencia para generar artefactos en inglés.
 
 rules:
   proposal:
     - Include rollback plan
   specs:
     - Use Given/When/Then format for scenarios
-    - Write normative keywords in Spanish, DEBE (MUST) on the first verb of each
-      requirement and NO DEBE for prohibitions, because the OpenSpec validator looks
-      for MUST or SHALL
   design:
     - Include sequence diagrams for complex flows
 
