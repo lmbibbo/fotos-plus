@@ -1,10 +1,14 @@
 name: archive-merge
 
-# Se dispara al aplicar una etiqueta a un PR. El job `verify` corre siempre;
-# el job `merge` solo corre si la etiqueta es exactamente `archive`.
+# El job `verify` corre en cada PR y en cada push a un PR. El job `merge` solo
+# corre si la etiqueta aplicada es exactamente `archive`.
 on:
   pull_request:
-    types: [labeled]
+    # `main` exige el check `verify`, asi que tiene que correr en cada push y en
+    # cada PR nuevo, no solo cuando alguien aplica una etiqueta. Sin esto ningun
+    # PR podia desbloquearse. `labeled` se conserva porque el job `merge` de mas
+    # abajo sigue gatillado por la etiqueta `archive`.
+    types: [opened, reopened, synchronize, labeled]
 
 permissions:
   contents: write
