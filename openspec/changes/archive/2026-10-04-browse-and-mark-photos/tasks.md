@@ -28,7 +28,7 @@
 ## 4. Photo inventory endpoint for the served viewer
 
 - [x] 4.1 Add an endpoint returning, for one group key, the ordered photo references with their content hashes and current mark state, resolved with the same groups the cards already use; verify in `tests/test_server.py` that an unknown or ambiguous group key is refused with a reason.
-- [x] 4.2 Extend the served page payload with the per-group inventory only when serving, leaving the export path untouched; verify in `tests/test_viewer.py` that the served page carries the inventory and that the exported HTML does not.
+- [x] 4.2 Extend the served page payload with a `browse_key` and a `marked_count` per group, only when serving and leaving the export path untouched; the photo inventory itself is NOT embedded in the page and is fetched per group from the endpoint in 4.1 when a browser opens; verify in `tests/test_viewer.py` that the served page carries the keys and counts but no photo list, and that the exported HTML carries neither.
 
 ## 5. Group browser overlay in the served viewer
 
