@@ -29,6 +29,7 @@ from fotos_plus.models import (
     TripLocation,
     TripSuggestion,
 )
+from fotos_plus.viewer import UNCLASSIFIED_GROUP_KEY
 
 
 def trip(start: str, end: str, country: str | None = "Argentina") -> TripSuggestion:
@@ -57,11 +58,17 @@ def build_index(
     tmp_path: Path,
     scanned_at: str = "2026-01-01T00:00:00",
     shas: tuple[str, str] = ("a", "b"),
+    captured_at: tuple[str | None, str | None] = (
+        "2024-05-02T10:00:00",
+        "2024-08-02T10:00:00",
+    ),
 ) -> Path:
     """Indice minimo con un viaje y un periodo, con fotos reales en disco.
 
     Los hashes por defecto son cortos porque solo alcanzan para nombrar renders. Los
     tests que necesitan escribir marcas pasan hashes de verdad, que es lo que el formato exige.
+    Las fechas por defecto dejan cada foto en su grupo. Un `None` las saca de cualquier
+    intervalo y las manda al grupo sin clasificar.
     """
     from tests.conftest import make_sized_image
 
@@ -75,19 +82,19 @@ def build_index(
             name="a.jpg",
             extension=".jpg",
             size_bytes=1,
-            sha256=shas[0],
-            captured_at="2024-05-02T10:00:00",
-            latitude=-41.13,
-            longitude=-71.31,
-        ),
-        Photo(
-            relative_path="b.jpg",
-            name="b.jpg",
-            extension=".jpg",
-            size_bytes=1,
-            sha256=shas[1],
-            captured_at="2024-08-02T10:00:00",
-        ),
+                sha256=shas[0],
+                captured_at=captured_at[0],
+                latitude=-41.13,
+                longitude=-71.31,
+            ),
+            Photo(
+                relative_path="b.jpg",
+                name="b.jpg",
+                extension=".jpg",
+                size_bytes=1,
+                sha256=shas[1],
+                captured_at=captured_at[1],
+            ),
     ]
     index_path = tmp_path / "indice.json"
     write_index(ScanResult(root=str(root), scanned_at=scanned_at, photos=photos), index_path)
@@ -1020,8 +1027,41 @@ def test_the_photo_list_of_a_group_comes_back_in_order(tmp_path: Path, serving) 
 
     assert status == 200
     assert data["photos"] == [
-        {"ref": "a.jpg", "sha256": "a", "marked": False},
+        {
+            "ref": "a.jpg",
+            "sha256": "a",
+            "marked": False,
+            "captured_at": "2024-05-02T10:00:00",
+        },
     ]
+
+
+def test_the_photo_list_carries_the_capture_date_of_each_photo(
+    tmp_path: Path, serving
+) -> None:
+    """El visor necesita el dia de cada foto para pintar la linea de posicion."""
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data = fetch_photos(url, token, "2024-05-01T00:00:00")
+
+    assert status == 200
+    assert data["photos"][0]["captured_at"] == "2024-05-02T10:00:00"
+
+
+def test_a_photo_without_a_capture_date_serves_null_instead_of_dropping_the_key(
+    tmp_path: Path, serving
+) -> None:
+    """La clave se manda siempre: el cliente lee una sola propiedad sin comprobar nada."""
+    index_path = build_index(tmp_path, captured_at=(None, "2024-08-02T10:00:00"))
+    url, token = serving(index_path)
+
+    status, data = fetch_photos(url, token, UNCLASSIFIED_GROUP_KEY)
+
+    assert status == 200
+    assert [photo["ref"] for photo in data["photos"]] == ["a.jpg"]
+    assert "captured_at" in data["photos"][0]
+    assert data["photos"][0]["captured_at"] is None
 
 
 def test_the_photo_list_carries_the_content_hash_of_each_photo(

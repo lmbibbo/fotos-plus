@@ -1116,6 +1116,79 @@ def test_the_browser_shows_its_place_inside_the_group(tmp_path: Path) -> None:
     assert '(indice + 1) + " de " + lista.length' in document
 
 
+def _sentencia(document: str, patron: str) -> str:
+    """Una sentencia del script tal cual la ve el navegador."""
+    found = re.findall(patron, document, re.DOTALL)
+    assert len(found) == 1, f"se esperaba una sola sentencia, hay {len(found)}"
+    return found[0]
+
+
+def _fecha_declaration(document: str) -> str:
+    return _sentencia(document, r"var fecha =.*?;")
+
+
+def _position_assignment(document: str) -> str:
+    return _sentencia(document, r"posicion\.textContent =.*?;")
+
+
+def test_the_position_line_carries_the_capture_date_of_the_photo(
+    tmp_path: Path,
+) -> None:
+    """La foto mostrada dice que dia es: el recorrido es de una en una y la fecha no se deduce."""
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _browser_html(root, ["a.jpg"])
+
+    declaracion = _fecha_declaration(document)
+    assert "foto.captured_at" in declaracion
+    assert ".slice(0, 10)" in declaracion
+
+    asignacion = _position_assignment(document)
+    assert '" \\u00b7 " + fecha' in asignacion
+
+
+def test_a_photo_without_a_capture_date_leaves_the_position_line_alone(
+    tmp_path: Path,
+) -> None:
+    """Sin EXIF la linea queda como estaba: sin fecha y sin un texto que la reemplace."""
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _browser_html(root, ["a.jpg"])
+
+    assert 'foto.captured_at ? foto.captured_at.slice(0, 10) : ""' in _fecha_declaration(
+        document
+    )
+    assert 'fecha ? " \\u00b7 " + fecha : ""' in _position_assignment(document)
+    assert "sin fecha" not in document
+    assert "Sin fecha" not in document
+
+
+def test_the_shown_date_follows_the_photo_because_navigation_reassigns_the_line(
+    tmp_path: Path,
+) -> None:
+    """La fecha no puede quedar vieja: la pinta `mostrar`, que es por donde pasa todo salto."""
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _browser_html(root, ["a.jpg", "b.jpg"])
+
+    mostrar = re.search(
+        r"function mostrar\(indiceNuevo\) \{(.*?)\n    \}", document, re.DOTALL
+    )
+    assert mostrar is not None
+    assert "posicion.textContent" in mostrar.group(1)
+    assert "foto.captured_at" in mostrar.group(1)
+
+    for salto in (
+        "botonPrevio.addEventListener(\"click\", function () { mostrar(indice - 1); });",
+        "botonSiguiente.addEventListener(\"click\", function () { mostrar(indice + 1); });",
+        "mostrar(0);",
+    ):
+        assert salto in document, f"ningun camino de navegacion llama a mostrar: {salto}"
+
+
 def test_the_browser_asks_the_server_for_the_photo(tmp_path: Path) -> None:
     """La imagen no puede ir en un `src`: el token viaja en un encabezado."""
     root = tmp_path / "fotos"

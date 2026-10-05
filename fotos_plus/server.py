@@ -207,6 +207,7 @@ class _LabelHandler(http.server.BaseHTTPRequestHandler):
                         "ref": photo.relative_path,
                         "sha256": photo.sha256,
                         "marked": photo.sha256 in marked,
+                        "captured_at": photo.captured_at,
                     }
                     for photo in sorted(group.photos, key=_photo_sort_key)
                 ],
