@@ -1,0 +1,31 @@
+﻿# Tasks
+
+## 1. Preconditions
+
+- [x] 1.1 Confirm pull request #10 is merged and its content is on `main`: run `gh pr view 10 --json state,mergeCommit` and check `state` is `MERGED`, then `git fetch origin && git log --oneline -1 origin/main` and confirm the subject mentions the English artifacts change. Verify: both commands agree, otherwise stop â€” this change conflicts with #10 on the same lines and must not be merged first
+- [x] 1.2 Create the working branch from the updated `main`: `git checkout -b feature/rewrite-openspec-config origin/main`, then verify with `git rev-parse --abbrev-ref HEAD` and `git rev-parse HEAD origin/main` that the two hashes are equal
+- [x] 1.3 Read the current `openspec/config.yaml` as it exists after #10 landed, since its `context` and `rules` blocks are the baseline being edited, and verify the file already contains the `Language:` block that #10 introduced
+
+## 2. Rewrite openspec/config.yaml
+
+- [x] 2.1 Replace the `context` block: restore the project description in English (photo organizer, explores a directory, organizes by date/place/people, includes an ordered viewer), add the corrected architecture note stating that `fotos_plus/server.py` and `fotos_plus/viewer.py` are one application whose viewer is a single self-contained HTML document with inline CSS/JS and base64 `data:` URIs, keep the `Tech stack` and `Tests: pytest` lines, and add to `Git workflow` that direct commits and pushes to `main` are not allowed and that a branch which falls behind must merge `main` in and push the merge commit because force pushes are disabled. Keep exactly one `Language:` block. Verify: `python -c "import yaml;yaml.safe_load(open('openspec/config.yaml'))"` succeeds and the parsed `context` string contains `Language:` and no `Proyecto:`
+- [x] 2.2 Rewrite `rules`: delete the `rules.language` key entirely, restate the `specs` rule in English as `MUST` on the first verb of each requirement and `MUST NOT` for prohibitions, and add a one-line "Write in English" reminder to `proposal`, `design`, and `tasks`. Keep `proposal: Include rollback plan` and `design: Include sequence diagrams for complex flows`. Verify: parse the file and assert every key under `rules` is one of `proposal`, `specs`, `design`, `tasks`
+- [x] 2.3 Rewrite `operations.archive.guidance`: remove the `A single commit containing the code, tests, synced specs, and archive` line, keep running the archive on the current feature branch and never on `main`, keep running `openspec validate --specs --strict` before committing, keep the `git push -u origin <branch>` and `gh pr create --base main` step and the instruction not to open a second PR when one is already open, and add that the PR merges only when the `archive` label is applied because that label is the sole trigger for the squash merge and branch deletion. Verify: parse the file and confirm the guidance no longer mentions a single commit and does mention the `archive` label
+- [x] 2.4 Delete the commented-out template examples from the end of the file, keeping only the real `schema`, `context`, `rules`, and `operations` keys. Verify: `Select-String -Path openspec/config.yaml -Pattern '^\s*#'` returns nothing and the file still parses
+
+## 3. Verification
+
+- [ ] 3.1 Run `openspec validate --specs --strict` and confirm it reports 5 passed and 0 failed, proving the rewrite disturbed no spec
+- [ ] 3.2 Run `openspec validate --all --strict` and confirm it reports 5 passed and 0 failed, proving the active change `rewrite-openspec-config` still validates with `skip_specs: true`
+- [x] 3.3 Confirm the new context is actually consumed rather than silently ignored: run `openspec instructions proposal --change "rewrite-openspec-config" --json` and check its `context` field, which is the channel that actually carries the `config.yaml` context block. `openspec context` is NOT that channel: it prints an agent brief about the root and relationships, and does not include the context block. Verify the `context` string contains the English project description, the single-application architecture note, exactly one `Language:` block, and the `strict: true` line
+- [x] 3.4 Confirm the file has no dead rule keys and no residual Spanish policy text: grep `openspec/config.yaml` for `DEBE`, `proyecto`, `Pruebas`, and `Idioma` and confirm zero matches, and confirm the only top-level keys are `schema`, `context`, `rules`, and `operations`
+- [x] 3.5 Confirm the blast radius is one file: run `git diff --stat origin/main` and verify it lists only `openspec/config.yaml`, with `openspec/changes/rewrite-openspec-config/` as the expected addition of this change's own artifacts
+
+## 4. Archive and deliver
+
+- [x] 4.1 Archive the change on this branch and never on `main`: run `openspec archive rewrite-openspec-config --yes`, then verify the change moved to `openspec/changes/archive/` and that `openspec list` reports no active changes. Because `skip_specs: true`, verify no capability delta was written under `openspec/specs/` and that the five existing spec files are untouched
+- [x] 4.2 Re-run `openspec validate --specs --strict` after archiving, since archiving moves files, and confirm it still reports 5 passed and 0 failed
+- [x] 4.3 Commit the config rewrite together with the archived artifacts on this branch, then push with `git push -u origin feature/rewrite-openspec-config`, and verify with `git status --short --branch` that the branch tracks its remote and the working tree is clean
+- [x] 4.4 Open the pull request against `main` with `gh pr create --base main`, and verify with `gh pr view --json state,mergeable` that it comes back `OPEN` and `MERGEABLE`
+- [ ] 4.5 Apply the `archive` label with `gh pr edit --add-label archive`, then verify with `gh pr checks` that `verify` passed and that the `merge` job reports as skipped or succeeded, and confirm with `gh pr view --json state` that the PR reaches `MERGED` and that `main` contains the change
+- [ ] 4.6 Sync the local repository: `git checkout main && git pull --ff-only`, then verify with `git log --oneline -1 origin/main` and `git status --short --branch` that local `main` matches the remote and the tree is clean, and verify the remote feature branch is gone with `git ls-remote --heads origin feature/rewrite-openspec-config` returning nothing

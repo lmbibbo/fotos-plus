@@ -1,71 +1,58 @@
 schema: spec-driven
 
 context: |
-  Proyecto:
-  - Organizador de fotos.
-  - Explora un directorio o carpeta con fotos tomadas con un celular o una cámara digital
-    y las organiza según distintos criterios: fechas, lugares y gente.
-  - Incluye un visualizador ordenado de las fotos ya organizadas.
+  Project:
+  - Photo organizer. It explores a directory of photos taken with a phone or a
+    digital camera and organizes them by date, place, and people.
+  - It includes an ordered viewer for the photos that are already organized.
+
   Tech stack:
-  - App: Python
-  - Pruebas: pytest.
+  - App: Python, single package `fotos_plus`.
+  - Tests: pytest.
+  - The server and the viewer are not separate applications.
+    `fotos_plus/server.py` serves over `ThreadingHTTPServer`, and
+    `fotos_plus/viewer.py` emits one self-contained HTML document with inline
+    CSS and JS and base64 `data:` URIs for thumbnails. There is no frontend
+    build, no JS files, and no framework.
+
   Git workflow:
-  - Cada cambio se desarrolla en una rama `feature/<nombre-del-cambio>`.
-  - `openspec archive` se ejecuta SOBRE esa rama de feature, nunca sobre `main`.
-  - El resultado del archive se commitea en la misma rama, junto con el
-    código y los tests.
-  - La rama se pushea y se abre un PR contra `main` conteniendo todo el cambio.
-  Idioma:
-  - El usuario escribe en español; el agente responde SIEMPRE en inglés.
-  - Esto aplica al chat, a los comentarios en el código, a los mensajes de
-    commit y a cualquier artefacto generado (proposal, design, specs, tasks).
-  - Lo previamente generado en español (como este archivo) no se traduce, 
-    pero se puede usar como referencia para generar artefactos en inglés.
+  - Each change is developed on a `feature/<change-name>` branch.
+  - Direct commits or pushes to `main` are not allowed.
+  - `openspec archive` runs ON that feature branch, never on `main`.
+  - The archive result is committed on the same branch as the code and tests.
+  - The branch is pushed and a pull request is opened against `main`.
+  - Required checks use `strict: true` and force pushes are disabled. Once
+    `main` moves, merge `main` into the branch and push the merge commit:
+    `git merge origin/main && git push`.
+
+  Language:
+  - The user writes in Spanish; the agent ALWAYS replies in English.
+  - This applies to chat, code, code comments, commit messages, pull request
+    descriptions, and every generated artifact (proposal, design, specs,
+    tasks).
+  - Content generated earlier in Spanish is not retroactively translated.
 
 rules:
   proposal:
     - Include rollback plan
+    - Write in English
   specs:
     - Use Given/When/Then format for scenarios
+    - Write normative keywords in English. Use MUST on the first verb of each
+      requirement, and MUST NOT for prohibitions
   design:
     - Include sequence diagrams for complex flows
+    - Write in English
+  tasks:
+    - Write in English
 
 operations:
   archive:
     guidance:
-      - Ejecutar el archive sobre la rama de feature actual, nunca sobre `main`.
-      - Un único commit con código, tests, specs sincronizadas y archive.
-      - Correr `openspec validate --specs --strict` antes de commitear.
-      - git push -u origin <rama> y luego gh pr create --base main.
-      - Si la rama ya tiene un PR abierto, no crear otro.
-
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
-
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
-
-# Per-operation guidance (optional)
-# Add advisory guidance for how apply and archive work should be conducted.
-# This is separate from artifact rules above.
-# Example:
-#   operations:
-#     apply:
-#       guidance:
-#         - Keep test summaries concise
-#     archive:
-#       guidance:
-#         - Summarize the archive outcome before finishing
+      - Run the archive on the current feature branch, never on `main`.
+      - Run `openspec validate --specs --strict` before committing.
+      - git push -u origin <branch> and then gh pr create --base main.
+      - If the branch already has an open PR, do not create another one.
+      - The PR merges only when the `archive` label is applied, because that
+        label is the sole trigger for the squash merge and the branch
+        deletion.
