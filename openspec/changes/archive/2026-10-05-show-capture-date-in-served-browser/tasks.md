@@ -26,5 +26,5 @@
 - [x] 5.1 Commit the implementation and its tests on the `feature/show-capture-date-in-served-browser` branch, never on `main`.
 - [x] 5.2 Run `openspec validate --specs --strict` and verify it passes before archiving.
 - [x] 5.3 Run `openspec archive` on the feature branch, never on `main`, and commit the archive result on that same branch alongside the code.
-- [ ] 5.4 Verify every checkbox in the archived `tasks.md` is marked, including the ones completed while archiving, so the archived file reflects the work that was done.
-- [ ] 5.5 Push the branch and open a single pull request against `main` with an English description, and verify the PR is open and its checks have run.
+- [x] 5.4 Verify every checkbox in the archived `tasks.md` is marked, including the ones completed while archiving, so the archived file reflects the work that was done.
+- [x] 5.5 Push the branch and open a single pull request against `main` with an English description, and verify the PR is open and its checks have run.
