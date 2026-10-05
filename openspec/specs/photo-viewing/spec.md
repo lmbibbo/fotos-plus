@@ -327,11 +327,14 @@ El servidor DEBE (MUST) aceptar la asignación y el borrado de un tag de un grup
 
 ### Requirement: Browsing the photos of a group in the served viewer
 
-In `--serve` mode the viewer SHALL offer, for each group that owns at least one photo, a way to open
+In `--serve` mode the viewer MUST offer, for each group that owns at least one photo, a way to open
 a full-screen browser showing that group's photos one at a time. The browser SHALL advance to the
 previous and next photo, SHALL be operable from the keyboard for both directions, and SHALL show
-which photo of the group is currently displayed and how many the group holds. Reaching the first or
-the last photo SHALL leave the viewer on that photo rather than moving past the ends of the group.
+which photo of the group is currently displayed and how many the group holds. When the displayed
+photo carries a capture date, the browser SHALL also show that date in the `YYYY-MM-DD` form next to
+that position. When the displayed photo carries no capture date, the browser SHALL show the position
+alone, without a placeholder standing in for the date. Reaching the first or the last photo SHALL
+leave the viewer on that photo rather than moving past the ends of the group.
 
 #### Scenario: Opening the browser from a group
 
@@ -339,6 +342,26 @@ the last photo SHALL leave the viewer on that photo rather than moving past the 
 - **WHEN** the user opens that group's browser
 - **THEN** the browser shows the group's first photo
 - **AND** it shows the position within the group and the group's total photo count
+
+#### Scenario: A displayed photo that carries a capture date
+
+- **GIVEN** the browser open on a photo whose capture date is known
+- **WHEN** the browser displays that photo
+- **THEN** it shows that capture date next to the position within the group
+- **AND** the date is rendered in the `YYYY-MM-DD` form
+
+#### Scenario: A displayed photo with no capture date
+
+- **GIVEN** the browser open on a photo that carries no capture date
+- **WHEN** the browser displays that photo
+- **THEN** it shows the position within the group and the group's total photo count
+- **AND** it shows neither a date nor a placeholder where the date would have been
+
+#### Scenario: The shown date follows the displayed photo
+
+- **GIVEN** the browser open on a group whose photos carry different capture dates
+- **WHEN** the user moves to the next photo
+- **THEN** the shown date is that of the photo now displayed rather than the one left behind
 
 #### Scenario: Moving between photos
 
