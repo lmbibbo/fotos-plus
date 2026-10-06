@@ -19,6 +19,23 @@ fotos por su contenido, no solo por el nombre del archivo.
 según el archivo de sugerencias. No necesita servidor ni conexión: las miniaturas van
 embebidas en el propio archivo, así que se abre haciendo doble clic.
 
+La página ordena en **dos ejes distintos**:
+
+- Los **tags** agrupan *viajes y períodos*: cada tarjeta es un grupo y arrastrarla a otra
+  sección le cambia el tag.
+- Los **cubos** nombran *fotos sueltas*: una foto puede estar en varios y se eligen con el
+  selector del recorrido, no arrastrando.
+
+El orden de la página es siempre el mismo:
+
+1. Las secciones de los tags, por fecha de su primera tarjeta.
+2. La sección `Marcadas`.
+3. Una sección por cada cubo que tenga fotos, en el orden del catálogo.
+4. La sección `Sin cubo`, con las fotos que no están en ninguno.
+
+Las secciones de fotos usan miniaturas, no renders: es lo que permite que la página abra
+rápido con una biblioteca grande.
+
 ## Estado
 
 Proyecto en fase inicial: el escaneo de carpetas, las sugerencias de viajes y períodos y el
@@ -132,7 +149,7 @@ En un archivo hermano del índice, `<indice>-edicion.json`:
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "based_on_scanned_at": "2026-01-01T00:00:00",
   "labels": {
     "2024-05-01T00:00:00": "Viaje a Bariloche"
@@ -143,14 +160,26 @@ En un archivo hermano del índice, `<indice>-edicion.json`:
   },
   "marked": [
     "9f2c1e0a4b6d8f3a5c7e1b9d0f4a6c8e2b5d7f1a3c9e5b7d1f3a5c7e9b1d3f5a7"
-  ]
+  ],
+  "photo_tags": ["Favoritas", "Para imprimir"],
+  "photo_tagged": {
+    "9f2c1e0a4b6d8f3a5c7e1b9d0f4a6c8e2b5d7f1a3c9e5b7d1f3a5c7e9b1d3f5a7": [
+      "Favoritas",
+      "Para imprimir"
+    ]
+  }
 }
 ```
 
-La clave es la fecha de la primera foto del grupo (`first_captured_at`), la misma que ya usa
-el visor para ordenar. Cada grupo arranca en una foto distinta, así que esa clave es única.
+Las etiquetas, los tags y las marcas se guardan con dos claves distintas:
 
-Reglas:
+- `labels`, `tags` y `tagged` nombran **grupos**. La clave es la fecha de la primera foto del
+  grupo (`first_captured_at`), la misma que ya usa el visor para ordenar. Cada grupo arranca en una
+  foto distinta, así que esa clave es única.
+- `marked`, `photo_tags` y `photo_tagged` nombran **fotos**. La clave es el hash del contenido de
+  la foto, que no cambia al moverla de carpeta ni al renombrarla.
+
+Reglas de las etiquetas:
 
 - Una etiqueta **nunca se guarda vacía**. Borrar el texto no la quita: hay un botón
   "Quitar etiqueta", que es una operación aparte.
@@ -158,8 +187,19 @@ Reglas:
 - Si la referencia no corresponde a ningún grupo del escaneo vigente, el servidor lo dice y
   **no escribe nada**. El archivo de etiquetas no se toca.
 
-Un archivo `version: 1` o `version: 2` de antes todavía se lee: la primera modificación lo
-reescribe como `version: 3` conservando los nombres y los tags que tuviera.
+Reglas de los cubos:
+
+- `photo_tags` es un catálogo **aparte** de `tags`. El mismo nombre puede ser un tag de grupo y un
+  cubo de foto sin que los dos se refieran a la misma cosa.
+- En `photo_tagged` el valor es una **lista**, porque una foto puede estar en varios cubos a la vez.
+- Un nombre de cubo vacío no se guarda, y un nombre que no esté en `photo_tags` se rechaza al
+  escribir, igual que un tag que no está en `tags`.
+- Las asignaciones de fotos que el índice ya no tiene se podan al leer, pero **no se borran del
+  archivo**: si la foto vuelve, recupera su cubo. Los nombres del catálogo tampoco se borran.
+
+Un archivo `version: 1`, `version: 2` o `version: 3` de antes todavía se lee: la primera
+modificación lo reescribe como `version: 4` conservando los nombres, los tags y las marcas que
+tuviera. Leerlo nunca lo reescribe por sí solo.
 
 #### Tags: agrupar a mano
 
@@ -229,6 +269,25 @@ renombrar la foto.
 Si una marca apunta a una foto que el escaneo ya no tiene (una unidad sin conectar, por
 ejemplo), no se muestra ni cuenta, pero **sigue en el archivo**: si la foto vuelve, la marca
 vuelve con ella. Lo que sí pasa es que el próximo guardado reescribe el archivo sin ella.
+
+#### Cubos: nombrar fotos
+
+Al lado del botón `Marcar`, el recorrido trae un **selector de cubos**. Un cubo es un nombre
+corto que vos escribís y al que metés las fotos que te interesan de esa manera: `Favoritas`,
+`Para imprimir`, `Mandar a Marta`. El selector va aparte del botón de marcar a propósito:
+marcar sigue siendo **un solo clic**, y elegir cubos es otra decisión.
+
+- Una foto puede estar en **cuantos cubos quieras a la vez**. Los controles se encienden y se
+  apagan, uno por cubo.
+- Los nombres salen de vos: escribís uno nuevo en el casillero y queda en el catálogo para
+  reutilizarlo. El catálogo no se borra cuando un cubo se queda sin fotos.
+- Un nombre se compara **sin distinguir mayúsculas ni espacios**, así que `Favoritas` y
+  `  favorita  ` son el mismo cubo. Se guarda la forma en que lo escribiste la primera vez.
+- Los cubos son un **eje aparte de los tags**. El mismo nombre puede ser un tag de grupo y un
+  cubo de foto sin que los dos significan lo mismo, y el catálogo de cada uno se lleva por
+  separado.
+- El cambio se ve al instante, sin recargar la página. Si el servidor lo rechaza, el selector
+  vuelve a lo que el servidor de verdad tiene y avisa por qué.
 
 Quién escribe cada archivo, para que no se pisen:
 
@@ -511,6 +570,12 @@ Cualquier otro archivo se ignora en silencio.
 - **El visualizador no permite ver el original**: solo miniaturas de 200 px, sin pantalla
   completa, sin zoom y sin navegación por teclado. Agrandar la miniatura significa agrandar el
   HTML, así que el tamaño está fijo en esta etapa.
+- **Las secciones de fotos dibujan como mucho 300 fotos**: cada sección dibuja hasta 300 y el
+  encabezado dice cuántas tiene en total. Lo que queda afuera no se dibuja, y un aviso te dice cuántas
+  son y que las veas desde `Ver fotos` del grupo, que las lista todas sin agrandar el HTML. El límite
+  pesa sobre todo en `Sin cubo`, que por definición contiene casi toda la biblioteca: sin él, marcar una
+  sola foto pasaba la página de 130 KB a 42 MB con 2000 fotos. Para llegar a la foto 301 y siguientes
+  de un cubo grande hay que usar el recorrido.
 - **El visualizador se regenera entero en cada `view`**: no hay caché, así que abrirlo varias
   veces sobre el mismo índice vuelve a generar todas las miniaturas.
 

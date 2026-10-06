@@ -100,6 +100,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Puerto a usar en modo servidor. Si no se indica, se elige uno libre.",
     )
+    view_parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="Regenera la pagina en cada request, sin cache. Para desarrollo.",
+    )
     return parser
 
 
@@ -179,7 +184,9 @@ def _write_viewer_file(index_path: Path, output: Optional[Path]) -> Path:
     return target
 
 
-def _serve_viewer(index_path: Path, output: Optional[Path], port: Optional[int]) -> int:
+def _serve_viewer(
+    index_path: Path, output: Optional[Path], port: Optional[int], dev: bool = False
+) -> int:
     """Escribe el HTML igual que siempre y encima sirve una copia editable.
 
     El archivo del disco se genera en solo lectura: el servidor no lo modifica, pinta
@@ -192,7 +199,7 @@ def _serve_viewer(index_path: Path, output: Optional[Path], port: Optional[int])
     print(f"Visualizador: {target}", file=sys.stdout)
 
     try:
-        server, actual_port, token = start_edit_server(index_path, port=port)
+        server, actual_port, token = start_edit_server(index_path, port=port, dev=dev)
     except EditServerError as error:
         print(f"No se pudo arrancar el servidor: {error}", file=sys.stderr)
         return EXIT_PATH_ERROR
@@ -229,7 +236,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return EXIT_PATH_ERROR
         try:
             if args.serve:
-                return _serve_viewer(index_path, args.output, args.port)
+                return _serve_viewer(index_path, args.output, args.port, args.dev)
             target = _write_viewer_file(index_path, args.output)
         except (OSError, ValueError) as error:
             print(f"No se genero el visualizador: {error}", file=sys.stderr)

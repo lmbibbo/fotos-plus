@@ -636,7 +636,12 @@ def test_a_tag_with_no_assigned_groups_gets_no_section() -> None:
 
 
 def _tagged_html(
-    root: Path, tags: dict[str, str], catalog=(), token: str | None = None
+    root: Path,
+    tags: dict[str, str],
+    catalog=(),
+    token: str | None = None,
+    photo_tags=(),
+    photo_tagged=None,
 ) -> str:
     """Genera el documento del visor con tags ya resueltos en las tarjetas.
 
@@ -655,7 +660,225 @@ def _tagged_html(
         photo("b.jpg", "2024-06-01T10:00:00"),
     ]
     groups = assign_groups(photos, result, tags=tags)
-    return render_html(groups, str(root), token=token, tag_options=catalog)
+    return render_html(
+        groups,
+        str(root),
+        token=token,
+        tag_options=catalog,
+        # Sin token el render borra las marcas y no viaja inventario; con token, viaja.
+        marked=[],
+        photo_tags=photo_tags,
+        photo_tagged=photo_tagged,
+    )
+
+
+def _payload_of(document: str) -> dict:
+    return json.loads(re.search(r'id="viewer-data">(.*?)</script>', document, re.S).group(1))
+
+
+# --- 5.1 catalogo y pertenencia en el payload servido -------------------------
+
+
+def test_the_served_payload_carries_the_bucket_catalogue_and_membership(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _tagged_html(
+        root,
+        {"2024-01-01T00:00:00": "Viaje"},
+        token="t0ken",
+        photo_tags=["Favoritas", "Para imprimir"],
+        photo_tagged={"a.jpg": ["Favoritas"], "b.jpg": ["Favoritas", "Para imprimir"]},
+    )
+
+    payload = _payload_of(document)
+    assert payload["photo_tags"] == ["Favoritas", "Para imprimir"]
+    assert payload["photo_tagged"] == {
+        "a.jpg": ["Favoritas"],
+        "b.jpg": ["Favoritas", "Para imprimir"],
+    }
+
+
+def test_adding_buckets_leaves_every_existing_payload_field_untouched(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    without = _payload_of(_tagged_html(root, {}, token="t0ken"))
+    with_buckets = _payload_of(
+        _tagged_html(
+            root,
+            {},
+            token="t0ken",
+            photo_tags=["Favoritas"],
+            photo_tagged={"a.jpg": ["Favoritas"]},
+        )
+    )
+
+    # Los cubos agregan dos claves y nada mas: los grupos y el modo van iguales.
+    assert set(with_buckets) == set(without) | {"photo_tags", "photo_tagged"}
+    assert with_buckets["groups"] == without["groups"]
+    assert with_buckets["flat"] == without["flat"]
+    # Sin cubos, las dos claves viajan vacias y no rompen el script del recorrido.
+    assert without["photo_tags"] == []
+    assert without["photo_tagged"] == {}
+
+
+def test_the_export_payload_carries_no_bucket_fields(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    # Sin token el documento es el export: no hay donde guardar, asi que no viaja nada.
+    document = _tagged_html(
+        root,
+        {},
+        photo_tags=["Favoritas"],
+        photo_tagged={"a.jpg": ["Favoritas"]},
+    )
+
+    payload = _payload_of(document)
+    assert "photo_tags" not in payload
+    assert "photo_tagged" not in payload
+
+
+def test_a_photo_holding_no_bucket_is_left_out_of_the_membership_map(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _tagged_html(
+        root,
+        {},
+        token="t0ken",
+        photo_tags=["Favoritas"],
+        photo_tagged={"a.jpg": ["Favoritas"], "b.jpg": []},
+    )
+
+    assert _payload_of(document)["photo_tagged"] == {"a.jpg": ["Favoritas"]}
+
+
+# --- 5.2 el control del selector ----------------------------------------------
+
+
+def test_the_served_markup_carries_the_bucket_picker(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _tagged_html(root, {}, token="t0ken", photo_tags=["Favoritas"])
+
+    assert 'id="photo-browser-buckets"' in document
+    assert 'id="photo-browser-bucket-list"' in document
+    assert 'id="photo-browser-bucket-add"' in document
+    assert 'class="bucket-input"' in document
+    # El nombre nuevo se escribe en un input, con el catalogo como sugerencia.
+    assert 'list="bucket-catalog"' in document
+
+
+def test_the_picker_sits_next_to_the_mark_button(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _tagged_html(root, {}, token="t0ken")
+
+    # El boton de marcar sigue siendo un solo boton, antes que el selector de cubos.
+    assert document.index('id="photo-browser-mark"') < document.index(
+        'id="photo-browser-buckets"'
+    )
+    # Marcar no se vuelve un selector: sigue siendo un boton que se aprieta una vez.
+    assert document.count('id="photo-browser-mark"') == 1
+
+
+def test_the_bucket_catalogue_is_offered_as_a_separate_datalist(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _tagged_html(
+        root,
+        {"2024-01-01T00:00:00": "Viaje"},
+        catalog=["Viaje"],
+        token="t0ken",
+        photo_tags=["Viaje"],
+    )
+
+    # El mismo nombre en los dos ejes vive en dos datalists distintos, no en uno mezclado.
+    assert f'<option value="Viaje"></option>' in document
+    assert (
+        document.count(f'<datalist id="{TAG_CATALOG_ID}"><option value="Viaje">') == 1
+    )
+    assert document.count('<datalist id="bucket-catalog">') == 1
+    # El selector de cubos es uno solo en el recorrido; el de tags, uno por tarjeta.
+    assert document.count('list="bucket-catalog"') == 1
+    assert document.count('class="bucket-input"') == 1
+
+
+def test_the_picker_is_absent_without_a_server(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _tagged_html(root, {}, photo_tags=["Favoritas"])
+
+    assert 'id="photo-browser-buckets"' not in document
+    assert "bucket-catalog" not in document
+
+
+# --- 5.3 y 5.4 el script del selector -----------------------------------------
+
+
+def _script_of(document: str) -> str:
+    match = re.search(r'<script>\n(.*?)</script>', document, re.S)
+    assert match, "el documento servido deberia traer el script de edicion"
+    return match.group(1)
+
+
+def test_the_picker_shows_the_photo_membership_and_reposts_on_change(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _tagged_html(root, {}, token="t0ken", photo_tags=["Favoritas"])
+    script = _script_of(document)
+
+    # Lee la pertenencia que ya trae la pagina, sin pedirla.
+    assert "pintarCubos" in script
+    assert 'datos.photo_tagged' in script or "photo_tagged" in script
+    # Agregar y quitar van al endpoint con el hash de la foto, no con su ruta.
+    assert '"/api/photo-tags"' in script
+    assert "foto.sha256" in script
+    # Y se repinta al cambiar de foto, sin recargar.
+    assert "cubosDe" in script
+
+
+def test_a_rejected_bucket_edit_reports_the_reason_and_restores_the_server_state(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _tagged_html(root, {}, token="t0ken", photo_tags=["Favoritas"])
+    script = _script_of(document)
+
+    # Ante un rechazo se avisa el motivo y se vuelve a pintar lo que el servidor dice,
+    # no lo que se habia puesto de entrada.
+    assert "datos.buckets" in script
+    assert "pintarCubos" in script
+    assert 'error || "No se pudo guardar el cubo"' in script
+
+
+# --- 5.5 la documentacion ------------------------------------------------------
+
+
+def test_the_readme_describes_the_picker_next_to_mark() -> None:
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Marcar" in readme
+    assert re.search(r"[Cc]ubo", readme)
 
 
 def test_html_renders_a_section_per_tag(tmp_path: Path) -> None:
@@ -1225,3 +1448,720 @@ def test_the_exported_html_has_no_browser(tmp_path: Path) -> None:
     assert "/api/photos" not in document
     assert "/api/marks" not in document
     assert "<script>" not in document
+
+
+# --- 6.1 y 6.2 la forma de seccion y su construccion ---------------------------
+
+
+def test_a_section_with_photos_is_not_a_section_with_groups() -> None:
+    from fotos_plus.viewer import Section
+
+    fotos = [photo("a.jpg", "2024-01-01T10:00:00")]
+
+    seccion = Section(tag=None, title="Favoritas", photos=fotos)
+
+    assert seccion.holds_photos is True
+    assert seccion.count == 1
+    assert seccion.groups == []
+
+
+def test_a_group_section_keeps_counting_groups() -> None:
+    from fotos_plus.viewer import Section
+
+    grupos = [
+        assign_groups(
+            [photo("a.jpg", "2024-01-01T10:00:00")],
+            suggestions(trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")]),
+        )[0]
+    ]
+
+    seccion = Section(tag="Viaje", title="Viaje", groups=grupos)
+
+    assert seccion.holds_photos is False
+    assert seccion.count == 1
+
+
+def test_the_photo_sections_come_out_marked_then_buckets_then_untagged() -> None:
+    from fotos_plus.viewer import MARKED_SECTION_TITLE, UNTAGGED_PHOTOS_TITLE, photo_sections
+
+    a = photo("a.jpg", "2024-01-01T10:00:00")
+    b = photo("b.jpg", "2024-06-01T10:00:00")
+    c = photo("c.jpg", "2024-09-01T10:00:00")
+
+    sections = photo_sections(
+        [a, b, c],
+        marked=["b.jpg"],
+        photo_tags=["Favoritas", "Para imprimir"],
+        photo_tagged={"a.jpg": ["Favoritas"], "b.jpg": ["Para imprimir"]},
+    )
+
+    assert [section.title for section in sections] == [
+        MARKED_SECTION_TITLE,
+        "Favoritas",
+        "Para imprimir",
+        UNTAGGED_PHOTOS_TITLE,
+    ]
+
+
+def test_the_bucket_sections_follow_the_catalogue_order_not_the_date_order() -> None:
+    from fotos_plus.viewer import photo_sections
+
+    a = photo("a.jpg", "2024-01-01T10:00:00")
+    b = photo("b.jpg", "2024-06-01T10:00:00")
+
+    sections = photo_sections(
+        [a, b],
+        photo_tags=["Zeta", "Alfa"],
+        photo_tagged={"a.jpg": ["Alfa"], "b.jpg": ["Zeta"]},
+    )
+
+    # El orden es el del catalogo, no el de la fecha de cada foto.
+    assert [section.title for section in sections] == ["Zeta", "Alfa"]
+
+
+def test_a_catalogue_name_holding_no_photo_gets_no_section() -> None:
+    from fotos_plus.viewer import photo_sections
+
+    a = photo("a.jpg", "2024-01-01T10:00:00")
+
+    sections = photo_sections(
+        [a], photo_tags=["Favoritas", "Vacio"], photo_tagged={"a.jpg": ["Favoritas"]}
+    )
+
+    assert [section.title for section in sections] == ["Favoritas"]
+
+
+def test_a_photo_in_several_buckets_is_listed_under_each_of_them() -> None:
+    from fotos_plus.viewer import photo_sections
+
+    a = photo("a.jpg", "2024-01-01T10:00:00")
+
+    sections = photo_sections(
+        [a],
+        photo_tags=["Favoritas", "Para imprimir"],
+        photo_tagged={"a.jpg": ["Favoritas", "Para imprimir"]},
+    )
+
+    assert [section.title for section in sections] == ["Favoritas", "Para imprimir"]
+    assert all([a] == section.photos for section in sections)
+
+
+def test_a_marked_photo_is_only_in_the_marked_section_when_it_holds_no_bucket() -> None:
+    from fotos_plus.viewer import photo_sections
+
+    a = photo("a.jpg", "2024-01-01T10:00:00")
+
+    sections = photo_sections([a], marked=["a"])
+
+    assert len(sections) == 1
+    assert sections[0].photos == [a]
+
+
+def test_no_photo_at_all_gets_no_photo_section() -> None:
+    from fotos_plus.viewer import photo_sections
+
+    assert photo_sections([], marked=["a.jpg"], photo_tags=["Favoritas"]) == []
+
+
+def test_an_undated_photo_is_still_listed_and_follows_browse_order() -> None:
+    from fotos_plus.viewer import _photo_sort_key, photo_sections
+
+    con_fecha = photo("a.jpg", "2024-01-01T10:00:00")
+    sin_fecha = photo("b.jpg", None)
+
+    sections = photo_sections(
+        [sin_fecha, con_fecha],
+        photo_tags=["Favoritas"],
+        photo_tagged={"a.jpg": ["Favoritas"], "b.jpg": ["Favoritas"]},
+    )
+
+    # No se descarta por no tener fecha: aparece, y en el mismo orden que el recorrido.
+    assert sections[0].photos == [sin_fecha, con_fecha]
+    assert sections[0].photos == sorted(
+        [sin_fecha, con_fecha], key=_photo_sort_key
+    )
+
+
+def test_an_undated_photo_appears_in_the_untagged_section_too() -> None:
+    from fotos_plus.viewer import photo_sections
+
+    sin_fecha = photo("b.jpg", None)
+
+    sections = photo_sections([sin_fecha], photo_tags=["Favoritas"])
+
+    assert sections[0].title == "Sin cubo"
+    assert sections[0].photos == [sin_fecha]
+
+
+def test_photos_within_a_section_follow_browse_order() -> None:
+    from fotos_plus.viewer import photo_sections
+
+    b = photo("b.jpg", "2024-06-01T10:00:00")
+    a = photo("a.jpg", "2024-01-01T10:00:00")
+
+    sections = photo_sections([b, a], photo_tags=["Favoritas"], photo_tagged={
+        "a.jpg": ["Favoritas"],
+        "b.jpg": ["Favoritas"],
+    })
+
+    assert [p.name for p in sections[0].photos] == ["a.jpg", "b.jpg"]
+
+
+# --- 6.3 a 6.6 el marcado de las secciones de fotos ----------------------------
+
+
+def _sections_html(tmp_path: Path, **kwargs) -> str:
+    from fotos_plus.viewer import render_html
+
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+    groups = assign_groups(
+        [photo("a.jpg", "2024-01-01T10:00:00"), photo("b.jpg", "2024-06-01T10:00:00")],
+        suggestions(
+            trips=[
+                trip("2024-01-01T00:00:00", "2024-01-02T00:00:00"),
+                trip("2024-06-01T00:00:00", "2024-06-02T00:00:00"),
+            ]
+        ),
+    )
+    return render_html(groups, str(root), token="t0ken", **kwargs)
+
+
+def test_a_section_photo_renders_as_a_photo_not_as_a_group_card(tmp_path: Path) -> None:
+    document = _sections_html(
+        tmp_path, photo_tags=["Favoritas"], photo_tagged={"a.jpg": ["Favoritas"]}
+    )
+
+    assert '<section class="photo-section">' in document
+    # La foto de la seccion usa la tarjeta plana, con su fecha y sin encabezado de viaje.
+    assert 'class="card flat"' in document
+    assert "2024-01-01" in document
+
+
+def test_the_section_of_a_photo_reuses_the_flat_card_and_thumbnail(tmp_path: Path) -> None:
+    document = _sections_html(
+        tmp_path, photo_tags=["Favoritas"], photo_tagged={"a.jpg": ["Favoritas"]}
+    )
+
+    seccion = document.split('<section class="photo-section">', 1)[1].split("</section>")[0]
+    assert 'class="card flat"' in seccion
+    assert "base64," in seccion
+
+
+def test_a_section_photo_never_references_the_render_endpoint(tmp_path: Path) -> None:
+    document = _sections_html(
+        tmp_path,
+        photo_tags=["Favoritas"],
+        photo_tagged={"a.jpg": ["Favoritas"]},
+        marked=["b.jpg"],
+    )
+
+    # Las secciones usan thumbnails embebidos: ningun render se pide ni se escribe.
+    for seccion in document.split('<section class="photo-section">')[1:]:
+        cuerpo = seccion.split("</section>")[0]
+        assert "/render" not in cuerpo
+        assert "base64," in cuerpo
+
+
+def test_each_section_reports_its_photo_count(tmp_path: Path) -> None:
+    document = _sections_html(
+        tmp_path,
+        photo_tags=["Favoritas"],
+        photo_tagged={"a.jpg": ["Favoritas"], "b.jpg": ["Favoritas"]},
+    )
+
+    seccion = document.split('<section class="photo-section">', 1)[1].split("</section>")[0]
+    assert '<span class="tag-section-count">2 fotos</span>' in seccion
+
+
+def test_a_section_of_one_photo_says_photo_and_not_photos(tmp_path: Path) -> None:
+    document = _sections_html(
+        tmp_path, photo_tags=["Favoritas"], photo_tagged={"a.jpg": ["Favoritas"]}
+    )
+
+    assert '<span class="tag-section-count">1 foto</span>' in document
+
+
+# --- 6.7 el orden de la pagina -------------------------------------------------
+
+
+def test_the_page_goes_groups_then_marked_then_buckets_then_untagged(
+    tmp_path: Path,
+) -> None:
+    document = _sections_html(
+        tmp_path,
+        marked=["a.jpg"],
+        photo_tags=["Favoritas"],
+        photo_tagged={"b.jpg": ["Favoritas"]},
+    )
+
+    # Este documento no trae tags, asi que las tarjetas de grupo van en la grilla simple.
+    grid = document.index('<div class="grid">')
+    fotos = document.index('<section class="photo-section">')
+    assert grid < fotos
+    # Y entre las secciones de fotos: marcadas, despues cubos, al final sin cubo.
+    marcadas = document.index(">Marcadas<span")
+    favoritas = document.index(">Favoritas<span")
+    sin_cubo = document.index(">Sin cubo<span")
+    assert marcadas < favoritas < sin_cubo
+
+
+def test_a_library_with_nothing_to_regroup_keeps_the_single_flat_grid(
+    tmp_path: Path,
+) -> None:
+    document = _sections_html(tmp_path)
+
+    assert '<section class="photo-section">' not in document
+    assert '<section class="tag-section"' not in document
+    assert document.count('<article class="card"') == 2
+    assert "Marcadas" not in document
+    assert "Sin cubo" not in document
+
+
+# --- 6.8 los cubos no tocan las tarjetas de grupo ------------------------------
+
+
+def _group_cards(document: str) -> list[str]:
+    """Las tarjetas de grupo, sin las fotos sueltas de las secciones de cubos."""
+    return re.findall(r'<article class="card"(?![^>]*\bflat\b).*?</article>', document, re.S)
+
+
+def test_buckets_leave_a_group_card_alone(tmp_path: Path) -> None:
+    sin_cubos = _sections_html(tmp_path)
+    con_cubos = _sections_html(
+        tmp_path,
+        photo_tags=["Favoritas"],
+        photo_tagged={"a.jpg": ["Favoritas"], "b.jpg": ["Favoritas"]},
+    )
+
+    assert _group_cards(con_cubos) == _group_cards(sin_cubos)
+    assert _group_cards(con_cubos) != []
+
+
+def test_a_mark_leaves_the_group_card_alone(tmp_path: Path) -> None:
+    sin_marcas = _sections_html(tmp_path)
+    con_marcas = _sections_html(tmp_path, marked=["a.jpg"])
+
+    assert _group_cards(con_marcas) == _group_cards(sin_marcas)
+
+
+def test_a_bucketed_photo_disappears_from_the_section_when_unbucketed(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+    from fotos_plus.viewer import render_html
+
+    def documento(photo_tagged):
+        groups = assign_groups(
+            [photo("a.jpg", "2024-01-01T10:00:00"), photo("b.jpg", "2024-06-01T10:00:00")],
+            suggestions(trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")]),
+        )
+        return render_html(
+            groups,
+            str(root),
+            token="t0ken",
+            photo_tags=["Favoritas"],
+            photo_tagged=photo_tagged,
+        )
+
+    def seccion_favoritas(document: str) -> str:
+        return document.split(">Favoritas<span", 1)[1].split("</section>")[0]
+
+    def sin_cubos(document: str) -> str:
+        return document.split(">Sin cubo<span", 1)[1].split("</section>")[0]
+
+    bucketed = documento({"a.jpg": ["Favoritas"]})
+    unbucketed = documento({"b.jpg": ["Favoritas"]})
+
+    # a estaba en Favoritas y sale de esa seccion; queda solo en la de sin cubo.
+    assert seccion_favoritas(bucketed).count('<article class="card flat"') == 1
+    assert seccion_favoritas(unbucketed).count('<article class="card flat"') == 1
+    assert seccion_favoritas(unbucketed).count('alt="b.jpg"') == 1
+    assert seccion_favoritas(unbucketed).count('alt="a.jpg"') == 0
+    assert sin_cubos(unbucketed).count('alt="a.jpg"') == 1
+
+
+# --- 6.9 las secciones de fotos no son destino de arrastre --------------------
+
+
+def test_a_photo_section_is_not_a_drop_target(tmp_path: Path) -> None:
+    document = _sections_html(
+        tmp_path, photo_tags=["Favoritas"], photo_tagged={"a.jpg": ["Favoritas"]}
+    )
+
+    seccion = document.split('<section class="photo-section">', 1)[1].split("</section>")[0]
+    # Sin `data-drop` no hay zona de destino: soltar ahi no tiene a quien leer un tag.
+    assert "data-drop" not in seccion
+
+
+def test_the_drop_script_ignores_photo_sections(tmp_path: Path) -> None:
+    document = _sections_html(
+        tmp_path, photo_tags=["Favoritas"], photo_tagged={"a.jpg": ["Favoritas"]}
+    )
+
+    # El arrastre se engancha a `.tag-section` para mover tags, y a `.photo-section` solo
+    # para rechazar el gesto: una seccion de fotos nunca recibe una tarjeta de grupo.
+    assert 'querySelectorAll(".tag-section")' in document
+    assert 'querySelectorAll(".photo-section")' in document
+    assert 'querySelectorAll("section")' not in document
+    # El rechazo avisa el motivo y no guarda nada: no llama a `soltar` ni a `postTag`.
+    rechazo = document.split('querySelectorAll(".photo-section")', 1)[1].split("});", 1)[0]
+    assert "dropEffect = \"none\"" in rechazo
+    assert "postTag" not in rechazo
+    assert "soltar(" not in rechazo
+
+
+def test_a_group_section_is_still_a_drop_target(tmp_path: Path) -> None:
+    from fotos_plus.viewer import render_html
+
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+    groups = assign_groups(
+        [photo("a.jpg", "2024-01-01T10:00:00"), photo("b.jpg", "2024-06-01T10:00:00")],
+        suggestions(
+            trips=[
+                trip("2024-01-01T00:00:00", "2024-01-02T00:00:00"),
+                trip("2024-06-01T00:00:00", "2024-06-02T00:00:00"),
+            ]
+        ),
+        tags={"2024-01-01T00:00:00": "Viaje", "2024-06-01T00:00:00": "Familia"},
+    )
+
+    document = render_html(groups, str(root), token="t0ken")
+
+    # Los tags siguen armando secciones con `data-drop`: el arrastre no se toca.
+    assert document.count('<section class="tag-section" data-drop=') == 2
+
+
+def test_the_refusal_message_says_buckets_are_not_a_destination(tmp_path: Path) -> None:
+    document = _sections_html(
+        tmp_path, photo_tags=["Favoritas"], photo_tagged={"a.jpg": ["Favoritas"]}
+    )
+
+    rechazo = document.split('querySelectorAll(".photo-section")', 1)[1]
+    assert "Los cubos nombran fotos, no viajes" in rechazo
+
+
+# --- 7 el export estatico ------------------------------------------------------
+
+
+A_SHA = "a" * 64
+B_SHA = "b" * 64
+GONE_SHA = "f" * 64
+
+
+def _export_with(tmp_path: Path, **edicion) -> str:
+    """Genera el HTML exportado con un archivo de edicion dado.
+
+    Las fotos llevan hash de verdad porque el archivo de edicion los valida al
+    escribirse: un nombre de archivo no serviria como hash.
+    """
+    from fotos_plus.index import (
+        edicion_path_next_to,
+        suggestions_path_next_to,
+        write_index,
+        write_suggestions,
+    )
+    from fotos_plus.labels import LabelOverlay, write_edicion
+    from fotos_plus.models import ScanResult
+    from fotos_plus.viewer import build_view
+
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+    a = photo("a.jpg", "2024-01-01T10:00:00")
+    b = photo("b.jpg", "2024-07-01T10:00:00")
+    a.sha256 = A_SHA
+    b.sha256 = B_SHA
+    photos = [a, b]
+    index_path = tmp_path / "indice.json"
+    write_index(
+        ScanResult(root=str(root), scanned_at="2026-01-01T00:00:00", photos=photos),
+        index_path,
+    )
+    write_suggestions(
+        suggestions(
+            trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")],
+            periods=[period("2024-07-01T00:00:00", "2024-07-02T00:00:00")],
+        ),
+        suggestions_path_next_to(index_path),
+    )
+    write_edicion(
+        LabelOverlay(based_on_scanned_at="2026-01-01T00:00:00", **edicion),
+        edicion_path_next_to(index_path),
+    )
+    document, _ = build_view(index_path)
+    return document
+
+
+def test_the_export_shows_the_marked_and_bucket_sections(tmp_path: Path) -> None:
+    document = _export_with(
+        tmp_path,
+        marked=[A_SHA],
+        photo_tags=["Favoritas"],
+        photo_tagged={A_SHA: ["Favoritas"]},
+    )
+
+    assert ">Marcadas<span" in document
+    assert ">Favoritas<span" in document
+    # La de sin cubo tambien sale: la otra foto no esta en ningun cubo.
+    assert ">Sin cubo<span" in document
+
+
+def test_the_export_shows_the_bucket_section_next_to_the_marked_one(
+    tmp_path: Path,
+) -> None:
+    document = _export_with(
+        tmp_path,
+        marked=[A_SHA],
+        photo_tags=["Favoritas"],
+        photo_tagged={A_SHA: ["Favoritas"]},
+    )
+
+    assert document.index(">Marcadas<span") < document.index(">Favoritas<span")
+    assert document.index(">Favoritas<span") < document.index(">Sin cubo<span")
+
+
+def test_the_export_shows_the_untagged_section_even_with_no_buckets_at_all(
+    tmp_path: Path,
+) -> None:
+    document = _export_with(tmp_path, marked=[A_SHA])
+
+    assert ">Marcadas<span" in document
+    assert ">Sin cubo<span" in document
+
+
+def test_the_export_has_no_picker_and_no_bucket_controls(tmp_path: Path) -> None:
+    document = _export_with(
+        tmp_path, photo_tags=["Favoritas"], photo_tagged={A_SHA: ["Favoritas"]}
+    )
+
+    assert 'id="photo-browser-buckets"' not in document
+    assert "bucket-catalog" not in document
+    assert "bucket-toggle" not in document
+    assert "bucket-input" not in document
+    assert 'class="bucket-add"' not in document
+
+
+def test_the_export_has_no_drop_target_on_its_photo_sections(tmp_path: Path) -> None:
+    document = _export_with(
+        tmp_path, photo_tags=["Favoritas"], photo_tagged={A_SHA: ["Favoritas"]}
+    )
+
+    seccion = document.split('<section class="photo-section">', 1)[1].split("</section>")[0]
+    assert "data-drop" not in seccion
+    # Sin arrastre tampoco esta el script: el documento no ofrece ningun control.
+    assert "<script>" not in document
+
+
+def test_the_export_payload_withholds_the_bucket_inventory(tmp_path: Path) -> None:
+    document = _export_with(
+        tmp_path,
+        marked=[A_SHA],
+        photo_tags=["Favoritas"],
+        photo_tagged={A_SHA: ["Favoritas"]},
+    )
+
+    payload = json.loads(re.search(r'id="viewer-data">(.*?)</script>', document, re.S).group(1))
+    # Igual que las marcas, los cubos no viajan en el export: se muestran y no se
+    # embeben.
+    assert "photo_tags" not in payload
+    assert "photo_tagged" not in payload
+    assert "marked_count" not in payload["groups"][0]
+    assert "browse_key" not in payload["groups"][0]
+
+
+def test_a_bucket_whose_photo_is_gone_is_absent_but_its_name_survives(
+    tmp_path: Path,
+) -> None:
+    # GONE_SHA no esta en el indice: se escaneo antes y se borro despues.
+    document = _export_with(
+        tmp_path,
+        photo_tags=["Favoritas", "Para imprimir"],
+        photo_tagged={A_SHA: ["Favoritas"], GONE_SHA: ["Para imprimir"]},
+    )
+
+    # El nombre sigue en el archivo, asi que el selector lo ofrece, pero la foto no se
+    # muestra en ninguna seccion y su cubo queda vacio: sin seccion que le poner.
+    assert ">Para imprimir<span" not in document
+    seccion = document.split(">Favoritas<span", 1)[1].split("</section>")[0]
+    assert seccion.count('<article class="card flat"') == 1
+    assert 'alt="a.jpg"' in seccion
+    # Y la de Favoritas sale con la foto que si existe.
+    assert ">Favoritas<span" in document
+
+
+def test_the_served_page_also_leaves_out_a_bucket_whose_photo_is_gone(
+    tmp_path: Path,
+) -> None:
+    document = _sections_html(
+        tmp_path,
+        photo_tags=["Favoritas"],
+        photo_tagged={"a.jpg": ["Favoritas"], "zz.jpg": ["Favoritas"]},
+    )
+
+    # La foto que no existe no se muestra; la que si, sigue en su seccion, y la seccion
+    # cuenta solo esa.
+    seccion = document.split(">Favoritas<span", 1)[1].split("</section>")[0]
+    assert seccion.count('<article class="card flat"') == 1
+    assert 'class="tag-section-count">1 foto</span>' in seccion
+
+
+def test_the_served_page_keeps_the_name_of_a_bucket_with_no_resolvable_photo(
+    tmp_path: Path,
+) -> None:
+    document = _sections_html(
+        tmp_path,
+        photo_tags=["Para imprimir"],
+        photo_tagged={"zz.jpg": ["Para imprimir"]},
+    )
+
+    # El nombre sobrevive en el payload para poder volver a elegirlo, aunque hoy no
+    # tenga ninguna foto que mostrar.
+    payload = json.loads(re.search(r'id="viewer-data">(.*?)</script>', document, re.S).group(1))
+    assert payload["photo_tags"] == ["Para imprimir"]
+
+
+# --- el tope de fotos por seccion ----------------------------------------------
+
+
+
+# --- el tope de fotos por seccion ----------------------------------------------
+#
+# La miniatura se reemplaza por un texto fijo: lo que se prueba es cuantas se dibujan, y
+# generar de verdad cientos de miniaturas haria el test lentisimo sin agregar confianza.
+
+
+@pytest.fixture
+def miniaturas_baratas(monkeypatch):
+    from fotos_plus import viewer
+
+    monkeypatch.setattr(viewer, "_thumbnail_b64", lambda photo, root: "mini")
+
+
+def _seccion_de_fotos(n: int):
+    from fotos_plus.viewer import Section
+
+    return Section(
+        tag=None,
+        title="Favoritas",
+        photos=[
+            photo(f"f{i}.jpg", f"2024-01-01T{i // 60:02d}:{i % 60:02d}:00")
+            for i in range(n)
+        ],
+    )
+
+
+def test_a_section_under_the_cap_draws_every_photo(miniaturas_baratas) -> None:
+    from fotos_plus.viewer import PHOTOS_PER_SECTION, _section_html
+
+    total = PHOTOS_PER_SECTION - 1
+    html = _section_html(_seccion_de_fotos(total), Path("C:/fotos"), {})
+
+    assert html.count('<article class="card flat"') == total
+    assert f'<span class="tag-section-count">{total} fotos</span>' in html
+    assert "Se muestran" not in html
+
+
+def test_a_section_over_the_cap_draws_a_bounded_number_of_photos(
+    miniaturas_baratas,
+) -> None:
+    from fotos_plus.viewer import PHOTOS_PER_SECTION, _section_html
+
+    total = PHOTOS_PER_SECTION + 25
+    html = _section_html(_seccion_de_fotos(total), Path("C:/fotos"), {})
+
+    # El encabezado cuenta la verdad, aunque no se dibujen todas.
+    assert f'<span class="tag-section-count">{total} fotos</span>' in html
+    # Y el numero de miniaturas embebidas no pasa del tope: de esto vive la pagina.
+    assert html.count('<article class="card flat"') == PHOTOS_PER_SECTION
+
+
+def test_the_truncation_notice_says_how_many_were_left_out(miniaturas_baratas) -> None:
+    from fotos_plus.viewer import PHOTOS_PER_SECTION, _section_html
+
+    total = PHOTOS_PER_SECTION + 7
+    html = _section_html(_seccion_de_fotos(total), Path("C:/fotos"), {})
+
+    assert f"Se muestran {PHOTOS_PER_SECTION} de {total}" in html
+    assert "Las otras 7 fotos no se dibujan" in html
+    # El aviso menciona la salida: el recorrido, que ya existe, sigue mostrando todo.
+    assert "recorrido" in html
+
+
+def test_the_truncation_notice_is_singular_for_one_left_out(miniaturas_baratas) -> None:
+    from fotos_plus.viewer import PHOTOS_PER_SECTION, _section_html
+
+    html = _section_html(_seccion_de_fotos(PHOTOS_PER_SECTION + 1), Path("C:/fotos"), {})
+
+    assert "Las otras 1 foto no se dibujan" in html
+
+
+def test_the_truncated_section_keeps_its_first_photos(miniaturas_baratas) -> None:
+    """Lo que se dibuja es el principio de la lista, en orden de recorrido."""
+    from fotos_plus.viewer import PHOTOS_PER_SECTION, _section_html
+
+    html = _section_html(_seccion_de_fotos(PHOTOS_PER_SECTION + 25), Path("C:/fotos"), {})
+
+    assert 'alt="f0.jpg"' in html
+    assert f'alt="f{PHOTOS_PER_SECTION - 1}.jpg"' in html
+    assert f'alt="f{PHOTOS_PER_SECTION}.jpg"' not in html
+
+
+def test_a_truncated_section_still_carries_no_drop_target(miniaturas_baratas) -> None:
+    from fotos_plus.viewer import PHOTOS_PER_SECTION, _section_html
+
+    html = _section_html(_seccion_de_fotos(PHOTOS_PER_SECTION + 5), Path("C:/fotos"), {})
+
+    assert "data-drop" not in html
+
+
+def test_the_cap_is_what_keeps_the_untagged_section_affordable(
+    miniaturas_baratas,
+) -> None:
+    """El caso que rompia la pagina: marcar una foto llenaba 'Sin cubo' con la biblioteca."""
+    from fotos_plus import viewer
+
+    total = viewer.PHOTOS_PER_SECTION * 6
+    secciones = viewer.photo_sections(
+        [photo(f"f{i}.jpg", f"2024-01-01T{i // 60:02d}:{i % 60:02d}:00") for i in range(total)],
+        marked=["f0.jpg"],
+        photo_tags=["Favoritas"],
+        photo_tagged={"f0.jpg": ["Favoritas"]},
+    )
+    sin_cubo = [s for s in secciones if s.title == "Sin cubo"][0]
+
+    html = viewer._section_html(sin_cubo, Path("C:/fotos"), {})
+
+    assert sin_cubo.count == total - 1
+    assert html.count('<article class="card flat"') == viewer.PHOTOS_PER_SECTION
+    assert f'<span class="tag-section-count">{total - 1} fotos</span>' in html
+
+
+def test_the_marked_section_is_capped_too(miniaturas_baratas) -> None:
+    from fotos_plus import viewer
+
+    total = viewer.PHOTOS_PER_SECTION + 3
+    secciones = viewer.photo_sections(
+        [photo(f"f{i}.jpg", f"2024-01-01T{i // 60:02d}:{i % 60:02d}:00") for i in range(total)],
+        marked=[f"f{i}.jpg" for i in range(total)],
+    )
+    marcadas = [s for s in secciones if s.title == viewer.MARKED_SECTION_TITLE][0]
+
+    html = viewer._section_html(marcadas, Path("C:/fotos"), {})
+
+    assert html.count('<article class="card flat"') == viewer.PHOTOS_PER_SECTION
+    assert f'<span class="tag-section-count">{total} fotos</span>' in html
+
+
+def test_the_photo_browser_can_scroll_to_the_bucket_controls() -> None:
+    """Los controles de cubo tienen que poder alcanzarse, no quedar fuera de pantalla.
+
+    El overlay es `position: fixed` con la imagen a 78vh: sin `overflow` los controles de
+    cubo quedaban debajo del viewport y no habia forma de llegar a ellos.
+    """
+    from fotos_plus.viewer import CSS
+
+    assert re.search(r"\.browser\s*\{[^}]*overflow-y:\s*auto", CSS)
+    # Y la imagen tiene que dejarles lugar: a 78vh no sobra espacio para nada mas.
+    assert "max-height: 78vh" not in CSS
