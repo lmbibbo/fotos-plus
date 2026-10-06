@@ -1,10 +1,15 @@
 """The edition file: what the user wrote, stored next to the index.
 
-It holds four things, and they are separate axes. Three name or classify groups and are
+It holds six things, and they are separate axes. Three name or classify groups and are
 keyed by the group's earliest date: `labels` gives it a name, `tagged` assigns it a tag, and
-`tags` is the catalogue those tags are chosen from. The fourth, `marked`, does not name
-groups at all: it marks individual photos and is stored as a flat list of content hashes, so
-that it survives the photo being moved to another folder.
+`tags` is the catalogue those tags are chosen from. The other three do not name groups at all
+and are keyed by the photo's content hash, so they survive the photo being moved to another
+folder: `marked` is a flat list of hashes recording which photos the user kept, and
+`photo_tagged` maps a hash to the buckets that photo belongs to, chosen from the separate
+`photo_tags` catalogue.
+
+The group axes and the photo axes do not share a catalogue, so the same name may be used on
+both without the two referring to each other.
 
 The file has a single writer, the editor, and is written atomically. Earlier versions are
 still readable and are migrated in memory when read.
@@ -21,18 +26,23 @@ from typing import Iterable, Optional
 from .index import write_json_atomic
 from .models import SuggestionsResult
 
-EDITION_VERSION = 3
+EDITION_VERSION = 4
 
 # Version 1 only had `labels`. Version 2 added the tag catalogue and the assignments.
-# Version 3 adds `marked`, the photos the user kept. Earlier versions are still read and
-# migrated to the current one in memory, without rewriting the file yet.
-SUPPORTED_EDITIONS = (1, 2, 3)
+# Version 3 adds `marked`, the photos the user kept. Version 4 adds the bucket catalogue and
+# the bucket assignments. Earlier versions are still read and migrated to the current one in
+# memory, without rewriting the file yet.
+SUPPORTED_EDITIONS = (1, 2, 3, 4)
 
 EMPTY_LABEL_ERROR = "una etiqueta no puede estar vacia"
 EMPTY_TAG_ERROR = "un tag no puede estar vacio"
+EMPTY_BUCKET_ERROR = "un cubo no puede estar vacio"
 MARK_SHAPE_ERROR = "una marca tiene que ser 64 caracteres hexadecimales en minuscula"
+BUCKET_KEY_ERROR = (
+    "una asignacion de cubo tiene que ser 64 caracteres hexadecimales en minuscula"
+)
 
-MARK_LENGTH = 64
+HASH_LENGTH = 64
 _HEX_DIGITS = set("0123456789abcdef")
 
 
@@ -44,47 +54,73 @@ class LabelError(Exception):
     """
 
 
-def _clean_text(value: object) -> str:
-    """Valida que un texto de etiqueta sea usable y lo devuelve sin espacios alrededor."""
+def _clean_name(value: object, not_text: str, empty: str) -> str:
+    """Valida que un nombre de la biblioteca de etiquetas sea usable y lo devuelve sin
+    espacios alrededor.
+
+    Los tres catálogos --etiquetas, tags y cubos-- rechazan lo mismo: un valor que no sea
+    texto y un texto que quede vacío al quitarle los espacios de los bordes. Cada uno
+    reporta su propio motivo, asi que el mensaje se recibe por parametro.
+    """
     if not isinstance(value, str):
-        raise LabelError("una etiqueta tiene que ser texto")
+        raise LabelError(not_text)
     cleaned = value.strip()
     if not cleaned:
-        raise LabelError(EMPTY_LABEL_ERROR)
+        raise LabelError(empty)
     return cleaned
+
+
+def _clean_text(value: object) -> str:
+    """Valida que un texto de etiqueta sea usable y lo devuelve sin espacios alrededor."""
+    return _clean_name(value, "una etiqueta tiene que ser texto", EMPTY_LABEL_ERROR)
 
 
 def _clean_tag(value: object) -> str:
     """Valida que un nombre de tag sea usable y lo devuelve sin espacios alrededor."""
-    if not isinstance(value, str):
-        raise LabelError("un tag tiene que ser texto")
-    cleaned = value.strip()
-    if not cleaned:
-        raise LabelError(EMPTY_TAG_ERROR)
-    return cleaned
+    return _clean_name(value, "un tag tiene que ser texto", EMPTY_TAG_ERROR)
+
+
+def _clean_bucket(value: object) -> str:
+    """Valida que un nombre de cubo sea usable y lo devuelve sin espacios alrededor."""
+    return _clean_name(value, "un cubo tiene que ser texto", EMPTY_BUCKET_ERROR)
 
 
 def _tag_identity(value: str) -> str:
     """La forma con la que se comparan dos nombres de tag para saber si son el mismo.
 
-    Solo decide si dos nombres son el mismo tag. La forma con la que se muestra y se guarda
+    Solo decide si dos nombres son el mismo tag. La forma en la que se muestra y se guarda
     es la que el usuario escribio, para que un tag escrito como "Viaje" no se vea como "viaje".
     """
     return value.strip().casefold()
 
 
-def _clean_mark(value: object) -> str:
-    """Validates a photo mark and returns the hash exactly as it is stored.
+def _clean_hash(value: object, error: str) -> str:
+    """Valida un hash de contenido y lo devuelve exactamente como se guarda.
 
-    A mark is the content hash of the photo, always lowercase because that is what the
-    scanner produces. That exact shape is required so one photo cannot end up recorded
-    twice under two different spellings.
+    Un hash de foto es el contenido del archivo, siempre en minuscula porque es lo que
+    produce el escaneo. Se exige esa forma exacta para que una foto no pueda quedar
+    registrada dos veces bajo dos escrituras distintas.
     """
     if not isinstance(value, str):
-        raise LabelError(MARK_SHAPE_ERROR)
-    if len(value) != MARK_LENGTH or not set(value) <= _HEX_DIGITS:
-        raise LabelError(MARK_SHAPE_ERROR)
+        raise LabelError(error)
+    if len(value) != HASH_LENGTH or not set(value) <= _HEX_DIGITS:
+        raise LabelError(error)
     return value
+
+
+def _clean_mark(value: object) -> str:
+    """Validates a photo mark and returns the hash exactly as it is stored."""
+    return _clean_hash(value, MARK_SHAPE_ERROR)
+
+
+def _copy_photo_tagged(overlay: "LabelOverlay") -> dict[str, list[str]]:
+    """Copia las asignaciones de cubos con sus listas propias.
+
+    Cada operacion devuelve un overlay nuevo y no toca el que recibio, asi que la copia
+    tiene que ser profunda: si dos overlays compartieran la misma lista, agregar un cubo en
+    uno se veria en el otro.
+    """
+    return {key: list(value) for key, value in overlay.photo_tagged.items()}
 
 
 @dataclass
@@ -96,10 +132,18 @@ class LabelOverlay:
     value the viewer already uses to order the cards and is unique among groups because the
     scanner hands out photos without overlap.
 
-    `marked` is the fourth axis and is not keyed by group: it is a flat list of photo
-    content hashes. It marks the photo rather than the group, so it survives the photo
-    moving folder and survives the derived group changing. Saving a label or a tag does
-    not touch it.
+    The photo axes are keyed by content hash instead, so they survive the photo moving folder
+    and survive the derived group changing. `marked` is a flat list of hashes and records
+    only whether the user kept the photo. `photo_tagged` maps a hash to the buckets that
+    photo belongs to, and `photo_tags` is the separate catalogue those bucket names are
+    chosen from.
+
+    A photo may belong to any number of buckets, so `photo_tagged` holds a list rather than a
+    single name. That is the one place the photo axes differ in shape from the group axes,
+    which hold exactly one tag each.
+
+    Saving a label, a tag, a mark or a bucket does not touch the other axes. Every operation
+    rebuilds the whole overlay field by field, so each one has to carry the rest through.
     """
 
     based_on_scanned_at: Optional[str] = None
@@ -107,10 +151,34 @@ class LabelOverlay:
     tags: list[str] = field(default_factory=list)
     tagged: dict[str, str] = field(default_factory=dict)
     marked: list[str] = field(default_factory=list)
+    photo_tags: list[str] = field(default_factory=list)
+    photo_tagged: dict[str, list[str]] = field(default_factory=dict)
 
     def is_marked(self, sha256: str) -> bool:
         """Whether that photo is marked."""
         return sha256 in self.marked
+
+    def buckets_for(self, sha256: str) -> list[str]:
+        """The buckets that photo belongs to, in catalogue order. Empty if it is in none."""
+        held = self.photo_tagged.get(sha256, [])
+        order = {name: position for position, name in enumerate(self.photo_tags)}
+        return sorted(held, key=lambda name: (order.get(name, len(order)), name))
+
+    def canonical_bucket(self, name: object) -> Optional[str]:
+        """El nombre del catalogo de cubos que corresponde a este nombre, o None si no esta.
+
+        Comparar sin mayusculas y sin espacios permite que " favorito " encuentre el cubo
+        "Favoritas" ya guardado en vez de crear una segunda entrada equivalente.
+        """
+        try:
+            cleaned = _clean_bucket(name)
+        except LabelError:
+            return None
+        identity = _tag_identity(cleaned)
+        for existing in self.photo_tags:
+            if _tag_identity(existing) == identity:
+                return existing
+        return None
 
     def title_for(self, key: str) -> Optional[str]:
         """Etiqueta vigente para una referencia, o None si el grupo no tiene."""
@@ -144,6 +212,10 @@ class LabelOverlay:
             "tags": list(self.tags),
             "tagged": dict(sorted(self.tagged.items())),
             "marked": sorted(self.marked),
+            "photo_tags": list(self.photo_tags),
+            "photo_tagged": {
+                key: self.buckets_for(key) for key in sorted(self.photo_tagged)
+            },
         }
 
     @classmethod
@@ -170,13 +242,15 @@ class LabelOverlay:
         if based_on is not None and not isinstance(based_on, str):
             raise LabelError("'based_on_scanned_at' del archivo de edicion no es texto")
 
-        # A v1 file has no `tags` nor `tagged`, and a v2 file has no `marked`. Each is
-        # migrated in memory to the current shape with whatever is missing empty, and the
-        # file is written at the current version the first time the user saves anything.
-        # Reading it never rewrites it.
+        # A v1 file has no `tags` nor `tagged`, a v2 file has no `marked`, and a v3 file has
+        # neither `photo_tags` nor `photo_tagged`. Each is migrated in memory to the current
+        # shape with whatever is missing empty, and the file is written at the current version
+        # the first time the user saves anything. Reading it never rewrites it.
         tags = cls._read_tags(data.get("tags"))
         tagged = cls._read_tagged(data.get("tagged"), tags)
         marked = cls._read_marked(data.get("marked"))
+        photo_tags = cls._read_photo_tags(data.get("photo_tags"))
+        photo_tagged = cls._read_photo_tagged(data.get("photo_tagged"), photo_tags)
 
         return cls(
             based_on_scanned_at=based_on,
@@ -184,6 +258,8 @@ class LabelOverlay:
             tags=tags,
             tagged=tagged,
             marked=marked,
+            photo_tags=photo_tags,
+            photo_tagged=photo_tagged,
         )
 
     @staticmethod
@@ -224,6 +300,29 @@ class LabelOverlay:
         return tags
 
     @staticmethod
+    def _read_photo_tags(raw: object) -> list[str]:
+        """El catalogo de cubos, validado con las mismas reglas que el de tags.
+
+        Vive aparte a proposito: un mismo nombre puede ser un tag de grupo y un cubo de
+        foto sin que los dos se refieran a la misma cosa.
+        """
+        if raw is None:
+            return []
+        if not isinstance(raw, list):
+            raise LabelError("'photo_tags' del archivo de edicion no es una lista JSON")
+
+        buckets: list[str] = []
+        seen: set[str] = set()
+        for value in raw:
+            cleaned = _clean_bucket(value)
+            identity = _tag_identity(cleaned)
+            if identity in seen:
+                raise LabelError(f"'photo_tags' repite el cubo {cleaned!r}")
+            seen.add(identity)
+            buckets.append(cleaned)
+        return buckets
+
+    @staticmethod
     def _read_tagged(raw: object, tags: list[str]) -> dict[str, str]:
         """Las asignaciones, validadas contra el catalogo ya leido."""
         if raw is None:
@@ -242,6 +341,44 @@ class LabelOverlay:
                 raise LabelError(f"el tag {cleaned!r} no esta en 'tags'")
             tagged[key] = canonical
         return tagged
+
+    @staticmethod
+    def _read_photo_tagged(
+        raw: object, photo_tags: list[str]
+    ) -> dict[str, list[str]]:
+        """Las asignaciones de cubos, validadas contra el catalogo de cubos ya leido.
+
+        La clave es el hash de contenido de la foto y la lista son los cubos que tiene, en
+        orden de catalogo y sin repeticiones. A diferencia de los grupos, una foto puede
+        estar en varios cubos a la vez, asi que el valor es una lista.
+        """
+        if raw is None:
+            return {}
+        if not isinstance(raw, dict):
+            raise LabelError("'photo_tagged' del archivo de edicion no es un objeto JSON")
+
+        order = {name: position for position, name in enumerate(photo_tags)}
+        known = {_tag_identity(name): name for name in photo_tags}
+        photo_tagged: dict[str, list[str]] = {}
+        for key, value in raw.items():
+            _clean_hash(key, BUCKET_KEY_ERROR)
+            if not isinstance(value, list):
+                raise LabelError(
+                    f"'photo_tagged[{key!r}]' del archivo de edicion no es una lista JSON"
+                )
+            held: list[str] = []
+            seen: set[str] = set()
+            for entry in value:
+                cleaned = _clean_bucket(entry)
+                canonical = known.get(_tag_identity(cleaned))
+                if canonical is None:
+                    raise LabelError(f"el cubo {cleaned!r} no esta en 'photo_tags'")
+                if canonical in seen:
+                    continue
+                seen.add(canonical)
+                held.append(canonical)
+            photo_tagged[key] = sorted(held, key=lambda name: (order[name], name))
+        return photo_tagged
 
 
 def read_edicion(path: Path) -> LabelOverlay:
@@ -265,15 +402,21 @@ def read_edicion(path: Path) -> LabelOverlay:
 def write_edicion(overlay: LabelOverlay, path: Path) -> Path:
     """Escribe el archivo de edicion de forma atomica.
 
-    Se vuelven a validar las etiquetas, los tags y las marcas antes de escribir: el archivo
-    tambien puede venir editado a mano, y no debe quedar guardada una etiqueta vacia, una
-    asignacion a un tag que no esta en el catalogo ni una marca mal formada.
+    Se vuelven a validar las etiquetas, los tags, las marcas y los cubos antes de escribir:
+    el archivo tambien puede venir editado a mano, y no debe quedar guardada una etiqueta
+    vacia, una asignacion a un tag que no esta en el catalogo, una marca mal formada ni un
+    cubo que no existe en su catalogo.
     """
     for value in overlay.labels.values():
         _clean_text(value)
     LabelOverlay._read_tags(list(overlay.tags))
     LabelOverlay._read_tagged(dict(overlay.tagged), list(overlay.tags))
     LabelOverlay._read_marked(list(overlay.marked))
+    LabelOverlay._read_photo_tags(list(overlay.photo_tags))
+    LabelOverlay._read_photo_tagged(
+        {key: list(value) for key, value in overlay.photo_tagged.items()},
+        list(overlay.photo_tags),
+    )
     return write_json_atomic(overlay.to_dict(), path)
 
 
@@ -416,6 +559,8 @@ def set_label(
         tags=list(overlay.tags),
         tagged=dict(overlay.tagged),
         marked=list(overlay.marked),
+        photo_tags=list(overlay.photo_tags),
+        photo_tagged=_copy_photo_tagged(overlay),
     )
 
 
@@ -439,6 +584,8 @@ def remove_label(overlay: LabelOverlay, key: object) -> LabelOverlay:
         tags=list(overlay.tags),
         tagged=dict(overlay.tagged),
         marked=list(overlay.marked),
+        photo_tags=list(overlay.photo_tags),
+        photo_tagged=_copy_photo_tagged(overlay),
     )
 
 
@@ -493,6 +640,8 @@ def set_tag(
         tags=tags,
         tagged=tagged,
         marked=list(overlay.marked),
+        photo_tags=list(overlay.photo_tags),
+        photo_tagged=_copy_photo_tagged(overlay),
     )
 
 
@@ -516,6 +665,104 @@ def clear_tag(overlay: LabelOverlay, key: object) -> LabelOverlay:
         tags=list(overlay.tags),
         tagged=tagged,
         marked=list(overlay.marked),
+        photo_tags=list(overlay.photo_tags),
+        photo_tagged=_copy_photo_tagged(overlay),
+    )
+
+
+def validate_bucket(
+    name: object, sha256: object, known_hashes: Iterable[str]
+) -> tuple[str, str]:
+    """Valida una asignacion de cubo antes de escribirla.
+
+    Devuelve el hash limpio y el nombre limpio. Rechaza con un motivo el nombre vacio, el
+    hash mal formado y el hash que no corresponde a ninguna foto del indice vigente.
+    """
+    cleaned_hash = _clean_hash(sha256, BUCKET_KEY_ERROR)
+    cleaned_name = _clean_bucket(name)
+    if cleaned_hash not in set(known_hashes):
+        raise LabelError(f"el hash {cleaned_hash} no corresponde a ninguna foto actual")
+    return cleaned_hash, cleaned_name
+
+
+def bucket_photo(
+    overlay: LabelOverlay,
+    sha256: object,
+    name: object,
+    known_hashes: Iterable[str],
+    scanned_at: Optional[str] = None,
+) -> LabelOverlay:
+    """Devuelve un overlay nuevo con esa foto en ese cubo. No muta el overlay de entrada.
+
+    Una foto puede estar en varios cubos, asi que agregar uno deja los demas como estaban.
+    Si el cubo no estaba en el catalogo se agrega al final, que es el orden en que el
+    usuario los fue creando; si ya habia uno equivalente por mayusculas o espacios se
+    reutiliza ese. Agregar un cubo que la foto ya tiene no lo duplica.
+    """
+    cleaned_hash, cleaned_name = validate_bucket(name, sha256, known_hashes)
+
+    photo_tags = list(overlay.photo_tags)
+    identity = _tag_identity(cleaned_name)
+    canonical = next(
+        (entry for entry in photo_tags if _tag_identity(entry) == identity), None
+    )
+    if canonical is None:
+        canonical = cleaned_name
+        photo_tags.append(canonical)
+
+    order = {entry: position for position, entry in enumerate(photo_tags)}
+    held = list(overlay.photo_tagged.get(cleaned_hash, []))
+    if canonical not in held:
+        held.append(canonical)
+    held.sort(key=lambda entry: (order.get(entry, len(order)), entry))
+
+    photo_tagged = _copy_photo_tagged(overlay)
+    photo_tagged[cleaned_hash] = held
+
+    return LabelOverlay(
+        based_on_scanned_at=scanned_at or overlay.based_on_scanned_at,
+        labels=dict(overlay.labels),
+        tags=list(overlay.tags),
+        tagged=dict(overlay.tagged),
+        marked=list(overlay.marked),
+        photo_tags=photo_tags,
+        photo_tagged=photo_tagged,
+    )
+
+
+def unbucket_photo(overlay: LabelOverlay, sha256: object, name: object) -> LabelOverlay:
+    """Devuelve un overlay nuevo sin esa foto en ese cubo. No muta el overlay de entrada.
+
+    Quitar un cubo no toca los demas que tenga la foto, ni la borra del catalogo, que es lo
+    que permite volver a elegirlo despues. Si era el ultimo, la foto deja de tener
+    asignaciones y queda como una foto mas de su grupo.
+
+    No se valida contra el escaneo a proposito: un cubo que quedo huerfano por un rescaneo
+    tiene que poder quitarse igual.
+    """
+    cleaned_hash = _clean_hash(sha256, BUCKET_KEY_ERROR)
+    canonical = overlay.canonical_bucket(name)
+    if canonical is None:
+        raise LabelError(f"el cubo {_clean_bucket(name)!r} no esta en 'photo_tags'")
+
+    held = list(overlay.photo_tagged.get(cleaned_hash, []))
+    if canonical in held:
+        held.remove(canonical)
+
+    photo_tagged = _copy_photo_tagged(overlay)
+    if held:
+        photo_tagged[cleaned_hash] = held
+    else:
+        photo_tagged.pop(cleaned_hash, None)
+
+    return LabelOverlay(
+        based_on_scanned_at=overlay.based_on_scanned_at,
+        labels=dict(overlay.labels),
+        tags=list(overlay.tags),
+        tagged=dict(overlay.tagged),
+        marked=list(overlay.marked),
+        photo_tags=list(overlay.photo_tags),
+        photo_tagged=photo_tagged,
     )
 
 
@@ -550,7 +797,35 @@ def _with_marked(overlay: LabelOverlay, marked: set[str]) -> LabelOverlay:
         tags=list(overlay.tags),
         tagged=dict(overlay.tagged),
         marked=sorted(marked),
+        photo_tags=list(overlay.photo_tags),
+        photo_tagged=_copy_photo_tagged(overlay),
     )
+
+
+def _with_photo_tagged(
+    overlay: LabelOverlay, photo_tagged: dict[str, list[str]]
+) -> LabelOverlay:
+    """Overlay nuevo con las asignaciones de cubos dadas y todo lo demas igual."""
+    return LabelOverlay(
+        based_on_scanned_at=overlay.based_on_scanned_at,
+        labels=dict(overlay.labels),
+        tags=list(overlay.tags),
+        tagged=dict(overlay.tagged),
+        marked=list(overlay.marked),
+        photo_tags=list(overlay.photo_tags),
+        photo_tagged=photo_tagged,
+    )
+
+
+def _resolve_hashes(values: Iterable[str], known_hashes: Iterable[str]) -> set[str]:
+    """De estos hashes de contenido, los que el indice vigente todavia tiene.
+
+    Las marcas y las asignaciones de cubos se guardan por hash y no por ruta, asi que las
+    dos se podan con la misma regla: si el hash no esta en el indice, todavia no se cuenta
+    para que se muestre, pero sigue en el archivo por si la foto vuelve.
+    """
+    known = set(known_hashes)
+    return {value for value in values if value in known}
 
 
 def prune_marked(overlay: LabelOverlay, known_hashes: Iterable[str]) -> LabelOverlay:
@@ -560,8 +835,25 @@ def prune_marked(overlay: LabelOverlay, known_hashes: Iterable[str]) -> LabelOve
     which is what happens when a drive is disconnected. It just stops being counted so it
     can be shown.
     """
-    known = set(known_hashes)
-    kept = [value for value in overlay.marked if value in known]
+    kept = _resolve_hashes(overlay.marked, known_hashes)
     if len(kept) == len(overlay.marked):
         return overlay
-    return _with_marked(overlay, set(kept))
+    return _with_marked(overlay, kept)
+
+
+def prune_photo_tagged(overlay: LabelOverlay, known_hashes: Iterable[str]) -> LabelOverlay:
+    """Drops from memory the bucket assignments of photos the index no longer has.
+
+    Los nombres del catalogo no se podan: si un cubo se queda sin fotos deja de producir
+    seccion, pero sigue disponible para cuando el usuario vuelva a elegirlo, y si la foto
+    vuelve recupera su asignacion sin haber escrito nada.
+    """
+    known = set(known_hashes)
+    kept = {
+        key: list(value)
+        for key, value in overlay.photo_tagged.items()
+        if key in known
+    }
+    if len(kept) == len(overlay.photo_tagged):
+        return overlay
+    return _with_photo_tagged(overlay, kept)

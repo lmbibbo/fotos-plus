@@ -13,18 +13,22 @@ from fotos_plus.index import (
 )
 from fotos_plus.labels import (
     EDITION_VERSION,
+    EMPTY_BUCKET_ERROR,
     EMPTY_LABEL_ERROR,
     EMPTY_TAG_ERROR,
     LabelError,
     LabelOverlay,
+    bucket_photo,
     clear_tag,
     mark_photo,
     prune_marked,
+    prune_photo_tagged,
     read_edicion,
     remove_label,
     resolve_labels,
     set_label,
     set_tag,
+    unbucket_photo,
     unmark_photo,
     validate_label,
     write_edicion,
@@ -471,10 +475,12 @@ def test_new_overlay_serializes_tags_and_tagged() -> None:
     data = overlay.to_dict()
 
     assert data["version"] == EDITION_VERSION
-    assert data["version"] == 3
+    assert data["version"] == 4
     assert data["tags"] == ["Viaje", "Familia"]
     assert data["tagged"] == {"2024-05-01T00:00:00": "Familia"}
     assert data["marked"] == []
+    assert data["photo_tags"] == []
+    assert data["photo_tagged"] == {}
 
 
 def test_reads_a_v1_file_and_keeps_its_labels(tmp_path: Path) -> None:
@@ -855,7 +861,7 @@ def test_a_v1_file_loads_with_no_marks(tmp_path: Path) -> None:
     assert overlay.marked == []
 
 
-def test_the_first_mark_writes_version_3_and_keeps_the_tags(tmp_path: Path) -> None:
+def test_the_first_mark_writes_version_4_and_keeps_the_tags(tmp_path: Path) -> None:
     path = tmp_path / "x-edicion.json"
     path.write_text(
         json.dumps(
@@ -872,10 +878,12 @@ def test_the_first_mark_writes_version_3_and_keeps_the_tags(tmp_path: Path) -> N
     write_edicion(mark_photo(overlay, HASH_A), path)
 
     saved = json.loads(path.read_text(encoding="utf-8"))
-    assert saved["version"] == 3
+    assert saved["version"] == 4
     assert saved["marked"] == [HASH_A]
     assert saved["tags"] == ["Familia"]
     assert saved["tagged"] == {"2024-05-01T00:00:00": "Familia"}
+    assert saved["photo_tags"] == []
+    assert saved["photo_tagged"] == {}
 
 
 def test_marks_are_stored_sorted_and_without_duplicates(tmp_path: Path) -> None:
@@ -1081,3 +1089,407 @@ def test_prune_of_an_empty_index_empties_the_marks() -> None:
     result = prune_marked(LabelOverlay(marked=[HASH_A]), [])
 
     assert result.marked == []
+
+
+# --- cubos de fotos ---------------------------------------------------------
+
+
+def test_a_new_overlay_has_empty_bucket_fields() -> None:
+    overlay = LabelOverlay()
+
+    assert overlay.photo_tags == []
+    assert overlay.photo_tagged == {}
+    assert overlay.to_dict()["photo_tags"] == []
+    assert overlay.to_dict()["photo_tagged"] == {}
+
+
+def test_a_v3_file_loads_with_no_buckets_and_is_not_rewritten(tmp_path: Path) -> None:
+    """An already-saved v3 file reads the same, with empty buckets and untouched on disk."""
+    path = tmp_path / "x-edicion.json"
+    original = {
+        "version": 3,
+        "based_on_scanned_at": "2026-01-01T00:00:00",
+        "labels": {"2024-05-01T00:00:00": "Bariloche"},
+        "tags": ["Familia"],
+        "tagged": {"2024-05-01T00:00:00": "Familia"},
+        "marked": [HASH_A],
+    }
+    path.write_text(json.dumps(original), encoding="utf-8")
+
+    overlay = read_edicion(path)
+
+    assert overlay.labels == {"2024-05-01T00:00:00": "Bariloche"}
+    assert overlay.tags == ["Familia"]
+    assert overlay.tagged == {"2024-05-01T00:00:00": "Familia"}
+    assert overlay.marked == [HASH_A]
+    assert overlay.photo_tags == []
+    assert overlay.photo_tagged == {}
+    assert json.loads(path.read_text(encoding="utf-8")) == original
+
+
+def test_a_v2_file_loads_with_no_buckets_and_keeps_its_tags(tmp_path: Path) -> None:
+    path = tmp_path / "x-edicion.json"
+    path.write_text(
+        json.dumps(
+            {"version": 2, "tags": ["Familia"], "tagged": {"2024-05-01T00:00:00": "Familia"}}
+        ),
+        encoding="utf-8",
+    )
+
+    overlay = read_edicion(path)
+
+    assert overlay.tags == ["Familia"]
+    assert overlay.tagged == {"2024-05-01T00:00:00": "Familia"}
+    assert overlay.photo_tagged == {}
+
+
+def test_a_v1_file_loads_with_no_buckets(tmp_path: Path) -> None:
+    path = tmp_path / "x-edicion.json"
+    path.write_text(
+        json.dumps({"version": 1, "labels": {"2024-05-01T00:00:00": "Bariloche"}}),
+        encoding="utf-8",
+    )
+
+    overlay = read_edicion(path)
+
+    assert overlay.labels == {"2024-05-01T00:00:00": "Bariloche"}
+    assert overlay.photo_tags == []
+
+
+def test_the_first_bucket_writes_version_4_and_keeps_the_tags_and_marks(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "x-edicion.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "tags": ["Familia"],
+                "tagged": {"2024-05-01T00:00:00": "Familia"},
+                "marked": [HASH_A],
+            }
+        ),
+        encoding="utf-8",
+    )
+    overlay = read_edicion(path)
+
+    write_edicion(bucket_photo(overlay, HASH_A, "Favoritas", [HASH_A]), path)
+
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["version"] == 4
+    assert saved["marked"] == [HASH_A]
+    assert saved["tags"] == ["Familia"]
+    assert saved["tagged"] == {"2024-05-01T00:00:00": "Familia"}
+    assert saved["photo_tags"] == ["Favoritas"]
+    assert saved["photo_tagged"] == {HASH_A: ["Favoritas"]}
+
+
+def test_a_malformed_bucket_key_is_rejected_on_write(tmp_path: Path) -> None:
+    path = tmp_path / "x-edicion.json"
+    path.write_text(json.dumps({"version": 4}), encoding="utf-8")
+    overlay = LabelOverlay(photo_tags=["Favoritas"], photo_tagged={"not-a-hash": ["Favoritas"]})
+
+    with pytest.raises(LabelError):
+        write_edicion(overlay, path)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"version": 4}
+
+
+def test_a_bucket_name_outside_the_catalogue_is_rejected_on_write(tmp_path: Path) -> None:
+    path = tmp_path / "x-edicion.json"
+    path.write_text(json.dumps({"version": 4}), encoding="utf-8")
+    overlay = LabelOverlay(photo_tags=["Favoritas"], photo_tagged={HASH_A: ["Otra"]})
+
+    with pytest.raises(LabelError):
+        write_edicion(overlay, path)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"version": 4}
+
+
+def test_a_bucket_name_outside_the_catalogue_is_rejected_on_read() -> None:
+    with pytest.raises(LabelError):
+        LabelOverlay.from_dict(
+            {"version": 4, "photo_tags": ["Favoritas"], "photo_tagged": {HASH_A: ["Otra"]}}
+        )
+
+
+def test_an_empty_bucket_name_is_rejected() -> None:
+    overlay = LabelOverlay(photo_tagged={HASH_A: ["Favoritas"]})
+
+    with pytest.raises(LabelError) as error:
+        bucket_photo(overlay, HASH_A, "   ", [HASH_A])
+
+    assert EMPTY_BUCKET_ERROR in str(error.value)
+    assert overlay.photo_tagged == {HASH_A: ["Favoritas"]}
+
+
+def test_a_non_text_bucket_name_is_rejected() -> None:
+    with pytest.raises(LabelError):
+        bucket_photo(LabelOverlay(), HASH_A, 7, [HASH_A])
+
+
+def test_a_new_bucket_name_is_added_to_the_catalogue() -> None:
+    result = bucket_photo(LabelOverlay(), HASH_A, "Favoritas", [HASH_A])
+
+    assert result.photo_tags == ["Favoritas"]
+    assert result.photo_tagged == {HASH_A: ["Favoritas"]}
+
+
+def test_a_bucket_differing_only_in_case_and_spaces_is_the_same_one() -> None:
+    overlay = LabelOverlay(photo_tags=["Favoritas"], photo_tagged={HASH_A: ["Favoritas"]})
+
+    result = bucket_photo(overlay, HASH_A, "  favoritas  ", [HASH_A])
+
+    assert result.photo_tags == ["Favoritas"]
+    assert result.photo_tagged == {HASH_A: ["Favoritas"]}
+
+
+def test_an_unknown_hash_is_rejected() -> None:
+    with pytest.raises(LabelError):
+        bucket_photo(LabelOverlay(), HASH_B, "Favoritas", [HASH_A])
+
+
+def test_a_malformed_hash_is_rejected() -> None:
+    with pytest.raises(LabelError):
+        bucket_photo(LabelOverlay(), "not-a-hash", "Favoritas", ["not-a-hash"])
+
+
+def test_a_photo_can_be_in_several_buckets() -> None:
+    overlay = bucket_photo(LabelOverlay(), HASH_A, "Favoritas", [HASH_A])
+
+    result = bucket_photo(overlay, HASH_A, "Para imprimir", [HASH_A])
+
+    assert result.photo_tags == ["Favoritas", "Para imprimir"]
+    assert result.buckets_for(HASH_A) == ["Favoritas", "Para imprimir"]
+
+
+def test_adding_a_bucket_the_photo_already_has_does_not_duplicate_it() -> None:
+    overlay = bucket_photo(LabelOverlay(), HASH_A, "Favoritas", [HASH_A])
+
+    result = bucket_photo(overlay, HASH_A, "Favoritas", [HASH_A])
+
+    assert result.photo_tagged == {HASH_A: ["Favoritas"]}
+
+
+def test_removing_one_bucket_keeps_the_others() -> None:
+    overlay = bucket_photo(LabelOverlay(), HASH_A, "Favoritas", [HASH_A])
+    overlay = bucket_photo(overlay, HASH_A, "Para imprimir", [HASH_A])
+
+    result = unbucket_photo(overlay, HASH_A, "Para imprimir")
+
+    assert result.buckets_for(HASH_A) == ["Favoritas"]
+    assert result.photo_tags == ["Favoritas", "Para imprimir"]
+
+
+def test_removing_the_last_bucket_leaves_the_photo_in_none() -> None:
+    overlay = bucket_photo(LabelOverlay(), HASH_A, "Favoritas", [HASH_A])
+
+    result = unbucket_photo(overlay, HASH_A, "Favoritas")
+
+    assert result.buckets_for(HASH_A) == []
+    assert result.photo_tagged == {}
+    assert result.photo_tags == ["Favoritas"]
+
+
+def test_removing_a_bucket_the_photo_does_not_have_is_harmless() -> None:
+    overlay = bucket_photo(LabelOverlay(), HASH_A, "Favoritas", [HASH_A])
+
+    result = unbucket_photo(overlay, HASH_B, "Favoritas")
+
+    assert result.buckets_for(HASH_A) == ["Favoritas"]
+
+
+def test_removing_an_unknown_bucket_name_is_rejected() -> None:
+    with pytest.raises(LabelError):
+        unbucket_photo(LabelOverlay(photo_tags=["Favoritas"]), HASH_A, "Otra")
+
+
+def test_bucket_membership_comes_back_in_catalogue_order() -> None:
+    overlay = LabelOverlay(photo_tags=["Para imprimir", "Favoritas"])
+
+    result = bucket_photo(overlay, HASH_A, "Favoritas", [HASH_A])
+    result = bucket_photo(result, HASH_A, "Para imprimir", [HASH_A])
+
+    assert result.buckets_for(HASH_A) == ["Para imprimir", "Favoritas"]
+
+
+# --- poda de cubos ----------------------------------------------------------
+
+
+def test_prune_drops_buckets_of_photos_the_index_no_longer_has() -> None:
+    overlay = LabelOverlay(
+        photo_tags=["Favoritas"],
+        photo_tagged={HASH_A: ["Favoritas"], HASH_B: ["Favoritas"]},
+    )
+
+    result = prune_photo_tagged(overlay, [HASH_A])
+
+    assert result.photo_tagged == {HASH_A: ["Favoritas"]}
+
+
+def test_prune_keeps_the_bucket_name_when_its_last_photo_is_gone() -> None:
+    """The name stays available to choose again, it just produces no section."""
+    overlay = LabelOverlay(photo_tags=["Favoritas"], photo_tagged={HASH_A: ["Favoritas"]})
+
+    result = prune_photo_tagged(overlay, [])
+
+    assert result.photo_tagged == {}
+    assert result.photo_tags == ["Favoritas"]
+
+
+def test_prune_of_buckets_does_not_rewrite_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "x-edicion.json"
+    path.write_text(
+        json.dumps(
+            {"version": 4, "photo_tags": ["Favoritas"], "photo_tagged": {HASH_A: ["Favoritas"]}}
+        ),
+        encoding="utf-8",
+    )
+    overlay = read_edicion(path)
+
+    prune_photo_tagged(overlay, [])
+
+    assert json.loads(path.read_text(encoding="utf-8"))["photo_tagged"] == {
+        HASH_A: ["Favoritas"]
+    }
+
+
+def test_prune_keeps_every_bucket_that_resolves() -> None:
+    overlay = LabelOverlay(
+        photo_tags=["Favoritas"],
+        photo_tagged={HASH_A: ["Favoritas"], HASH_B: ["Favoritas"]},
+    )
+
+    result = prune_photo_tagged(overlay, [HASH_A, HASH_B, HASH_C])
+
+    assert result.photo_tagged == {HASH_A: ["Favoritas"], HASH_B: ["Favoritas"]}
+
+
+# --- los cubos conviven con las otras dos editaciones ------------------------
+
+
+def bucketed() -> LabelOverlay:
+    return LabelOverlay(
+        based_on_scanned_at="2026-01-01T00:00:00",
+        labels={"2024-05-01T00:00:00": "Bariloche"},
+        tags=["Familia"],
+        tagged={"2024-05-01T00:00:00": "Familia"},
+        marked=[HASH_A],
+        photo_tags=["Favoritas"],
+        photo_tagged={HASH_A: ["Favoritas"]},
+    )
+
+
+def test_saving_a_label_keeps_the_buckets() -> None:
+    groups = suggestions(
+        trips=[
+            trip("2024-05-01T00:00:00", "2024-05-02T00:00:00"),
+            trip("2024-06-01T00:00:00", "2024-06-02T00:00:00"),
+        ]
+    )
+
+    result = set_label(bucketed(), groups, "2024-06-01T00:00:00", "Cordoba")
+
+    assert result.photo_tags == ["Favoritas"]
+    assert result.photo_tagged == {HASH_A: ["Favoritas"]}
+    assert result.labels["2024-06-01T00:00:00"] == "Cordoba"
+
+
+def test_removing_a_label_keeps_the_buckets() -> None:
+    result = remove_label(bucketed(), "2024-05-01T00:00:00")
+
+    assert result.labels == {}
+    assert result.photo_tags == ["Favoritas"]
+    assert result.photo_tagged == {HASH_A: ["Favoritas"]}
+
+
+def test_assigning_a_group_tag_keeps_the_buckets() -> None:
+    groups = suggestions(trips=[trip("2024-05-01T00:00:00", "2024-05-02T00:00:00")])
+
+    result = set_tag(bucketed(), groups, "2024-05-01T00:00:00", "Viaje")
+
+    assert result.tagged["2024-05-01T00:00:00"] == "Viaje"
+    assert result.photo_tags == ["Favoritas"]
+    assert result.photo_tagged == {HASH_A: ["Favoritas"]}
+
+
+def test_clearing_a_group_tag_keeps_the_buckets() -> None:
+    result = clear_tag(bucketed(), "2024-05-01T00:00:00")
+
+    assert result.tagged == {}
+    assert result.photo_tags == ["Favoritas"]
+    assert result.photo_tagged == {HASH_A: ["Favoritas"]}
+
+
+def test_marking_keeps_the_buckets() -> None:
+    result = mark_photo(bucketed(), HASH_B)
+
+    assert sorted(result.marked) == sorted([HASH_A, HASH_B])
+    assert result.photo_tags == ["Favoritas"]
+    assert result.photo_tagged == {HASH_A: ["Favoritas"]}
+
+
+def test_unmarking_keeps_the_buckets() -> None:
+    result = unmark_photo(bucketed(), HASH_A)
+
+    assert result.marked == []
+    assert result.photo_tags == ["Favoritas"]
+    assert result.photo_tagged == {HASH_A: ["Favoritas"]}
+
+
+def test_bucketing_keeps_the_marks_and_the_labels() -> None:
+    result = bucket_photo(bucketed(), HASH_B, "Para imprimir", [HASH_A, HASH_B])
+
+    assert result.marked == [HASH_A]
+    assert result.labels == {"2024-05-01T00:00:00": "Bariloche"}
+    assert result.tags == ["Familia"]
+    assert result.tagged == {"2024-05-01T00:00:00": "Familia"}
+    assert result.photo_tags == ["Favoritas", "Para imprimir"]
+    assert result.buckets_for(HASH_A) == ["Favoritas"]
+    assert result.buckets_for(HASH_B) == ["Para imprimir"]
+
+
+def test_unbucketing_keeps_the_marks_and_the_labels() -> None:
+    result = unbucket_photo(bucketed(), HASH_A, "Favoritas")
+
+    assert result.marked == [HASH_A]
+    assert result.labels == {"2024-05-01T00:00:00": "Bariloche"}
+    assert result.tags == ["Familia"]
+    assert result.tagged == {"2024-05-01T00:00:00": "Familia"}
+    assert result.photo_tags == ["Favoritas"]
+    assert result.photo_tagged == {}
+
+
+def test_the_same_name_can_be_a_group_tag_and_a_bucket() -> None:
+    overlay = LabelOverlay(tags=["Familia"], tagged={"2024-05-01T00:00:00": "Familia"})
+
+    result = bucket_photo(overlay, HASH_A, "Familia", [HASH_A])
+
+    assert result.tags == ["Familia"]
+    assert result.photo_tags == ["Familia"]
+    assert result.tagged == {"2024-05-01T00:00:00": "Familia"}
+    assert result.photo_tagged == {HASH_A: ["Familia"]}
+
+
+def test_clearing_a_group_tag_does_not_touch_the_buckets() -> None:
+    overlay = LabelOverlay(
+        tags=["Familia"],
+        tagged={"2024-05-01T00:00:00": "Familia"},
+        photo_tags=["Familia"],
+        photo_tagged={HASH_A: ["Familia"]},
+    )
+
+    result = clear_tag(overlay, "2024-05-01T00:00:00")
+
+    assert result.tagged == {}
+    assert result.buckets_for(HASH_A) == ["Familia"]
+
+
+def test_a_bucket_edit_does_not_mutate_the_overlay_it_got() -> None:
+    """Two overlays must not share the same membership list."""
+    overlay = bucket_photo(LabelOverlay(), HASH_A, "Favoritas", [HASH_A])
+
+    result = bucket_photo(overlay, HASH_A, "Para imprimir", [HASH_A])
+
+    assert overlay.buckets_for(HASH_A) == ["Favoritas"]
+    assert result.buckets_for(HASH_A) == ["Favoritas", "Para imprimir"]

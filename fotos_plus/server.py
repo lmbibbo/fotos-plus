@@ -18,15 +18,18 @@ from .index import (
 from .labels import (
     LabelError,
     LabelOverlay,
+    bucket_photo,
     clear_tag,
     derived_title,
     mark_photo,
     prune_marked,
+    prune_photo_tagged,
     read_edicion,
     remove_label,
     resolve_labels,
     set_label,
     set_tag,
+    unbucket_photo,
     unmark_photo,
     write_edicion,
 )
@@ -225,7 +228,7 @@ class _LabelHandler(http.server.BaseHTTPRequestHandler):
             return
 
         path = self.path.split("?", 1)[0]
-        if path not in ("/api/labels", "/api/marks"):
+        if path not in ("/api/labels", "/api/marks", "/api/photo-tags"):
             self._send_json(404, {"error": "no encontrado"})
             return
 
@@ -255,6 +258,10 @@ class _LabelHandler(http.server.BaseHTTPRequestHandler):
 
         if path == "/api/marks":
             self._save_mark(data)
+            return
+
+        if path == "/api/photo-tags":
+            self._save_bucket(data)
             return
 
         action = data.get("action") or "set"
@@ -347,6 +354,64 @@ class _LabelHandler(http.server.BaseHTTPRequestHandler):
             },
         )
 
+    def _save_bucket(self, data: dict) -> None:
+        """Agrega o quita un cubo de la foto nombrada por su hash.
+
+        A diferencia de las marcas, que son una sola operacion de ida y vuelta, un cubo se
+        agrega o se quita por separado: una foto puede estar en varios a la vez y quitar uno
+        no tiene que tocar los demas.
+
+        El hash no se usa como ruta del sistema de archivos: se busca en el indice para
+        saber que la foto existe, y lo que se guarda es el hash mismo, asi que la
+        pertenencia sobrevive a que la foto se mueva de carpeta. Lo unico que se reescribe es
+        el archivo de edicion.
+        """
+        server = self.server
+
+        action = data.get("action")
+        if action not in ("add", "remove"):
+            self._send_json(400, {"error": "accion desconocida"})
+            return
+
+        sha256 = data.get("sha256")
+        name = data.get("bucket")
+
+        if not isinstance(sha256, str) or not isinstance(name, str):
+            self._send_json(400, {"error": "falta el hash o el nombre del cubo"})
+            return
+
+        try:
+            if action == "add":
+                updated = bucket_photo(
+                    server.overlay,
+                    sha256,
+                    name,
+                    [photo.sha256 for photo in server.index().photos],
+                    server.scanned_at,
+                )
+            else:
+                updated = unbucket_photo(server.overlay, sha256, name)
+            write_edicion(updated, server.edicion_path)
+        except LabelError as error:
+            # Rechazo previsto: no se escribe nada y el archivo queda intacto.
+            self._send_json(400, {"error": str(error)})
+            return
+        except OSError as error:
+            self._send_json(500, {"error": f"no se pudo escribir: {error}"})
+            return
+
+        server.overlay = updated
+        # Las secciones de cubos son parte de la pagina, asi que hay que reconstruirla.
+        server.invalidate_page()
+        self._send_json(
+            200,
+            {
+                "ok": True,
+                "sha256": sha256,
+                "buckets": updated.buckets_for(str(sha256)),
+            },
+        )
+
 
 class _LabelServer(http.server.HTTPServer):
     def __init__(
@@ -358,10 +423,12 @@ class _LabelServer(http.server.HTTPServer):
         suggestions,
         edicion_path: Path,
         overlay: LabelOverlay,
+        dev: bool = False,
     ) -> None:
         super().__init__(server_address, handler_class)
         self.index_path = Path(index_path)
         self.token = token
+        self.dev = dev
         self.suggestions = suggestions
         self.scanned_at = suggestions.scanned_at
         self.edicion_path = Path(edicion_path)
@@ -388,11 +455,10 @@ class _LabelServer(http.server.HTTPServer):
         """
         if self._index_result is None:
             self._index_result = read_index(self.index_path)
-            # Las marcas de fotos que el indice ya no tiene no se cuentan para mostrar, pero
-            # siguen guardadas: si la foto vuelve, la marca esta.
-            self.overlay = prune_marked(
-                self.overlay, [photo.sha256 for photo in self._index_result.photos]
-            )
+            # Las marcas y los cubos de fotos que el indice ya no tiene no se cuentan para
+            # mostrar, pero siguen guardados: si la foto vuelve, la marca y el cubo estan.
+            known = [photo.sha256 for photo in self._index_result.photos]
+            self.overlay = prune_photo_tagged(prune_marked(self.overlay, known), known)
         return self._index_result
 
     def photo_for(self, reference: str):
@@ -454,7 +520,7 @@ class _LabelServer(http.server.HTTPServer):
         self._group_map = None
 
     def build_page(self) -> bytes:
-        if self._page_cache is not None:
+        if self._page_cache is not None and not self.dev:
             return self._page_cache
 
         result = self.index()
@@ -468,6 +534,8 @@ class _LabelServer(http.server.HTTPServer):
             drift=resolution,
             tag_options=self.overlay.tags,
             marked=self.overlay.marked,
+            photo_tags=self.overlay.photo_tags,
+            photo_tagged=self.overlay.photo_tagged,
         )
         self._page_cache = html.encode("utf-8")
         return self._page_cache
@@ -490,7 +558,10 @@ def _random_token() -> str:
 
 
 def start_edit_server(
-    index_path: Path, port: Optional[int] = None, bind: str = "127.0.0.1"
+    index_path: Path,
+    port: Optional[int] = None,
+    bind: str = "127.0.0.1",
+    dev: bool = False,
 ) -> tuple["_LabelServer", int, str]:
     """Arranca el servidor de edicion en loopback.
 
@@ -537,5 +608,6 @@ def start_edit_server(
         suggestions,
         edicion_path,
         overlay,
+        dev=dev,
     )
     return server, port, token

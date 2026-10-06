@@ -5,7 +5,7 @@ import html
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Optional, Sequence, TYPE_CHECKING
+from typing import Iterable, Mapping, Optional, Sequence, TYPE_CHECKING
 
 from .index import (
     edicion_path_next_to,
@@ -21,6 +21,19 @@ if TYPE_CHECKING:
     from .labels import LabelResolution
 
 THUMBNAILS_PER_GROUP = 5
+
+# Cuantas fotos se dibujan de verdad dentro de una seccion de fotos sueltas.
+#
+# Es el mismo tipo de recorte que `THUMBNAILS_PER_GROUP`, pero del otro lado: una tarjeta
+# de grupo ya se recorta a 5 miniaturas, asi que su costo no crece con la biblioteca. Una
+# seccion de cubos no: cada foto es una miniatura embebida, asi que sin tope el tamano de la
+# pagina crece con la cantidad de fotos del cubo. Con el tope, una seccion no puede pasar
+# de ~4 MB y la pagina sigue abriendo; el encabezado dice cuantas hay en total.
+#
+# El caso que motiva el tope es "Sin cubo", que por definicion contiene casi toda la
+# biblioteca: sin el, marcar una sola foto pasaba la pagina de 130 KB a 42 MB con 2000
+# fotos, y el navegador se colgaba antes de mostrar nada.
+PHOTOS_PER_SECTION = 300
 
 ORPHAN_TITLE = "Fotos sin clasificar"
 FLAT_GRID_TITLE = "Todas las fotos"
@@ -65,22 +78,36 @@ class Group:
 
 
 UNTAGGED_SECTION_TITLE = "Sin tag"
+MARKED_SECTION_TITLE = "Marcadas"
+UNTAGGED_PHOTOS_TITLE = "Sin cubo"
 TAG_CATALOG_ID = "tag-catalog"
+BUCKET_CATALOG_ID = "bucket-catalog"
 UNCLASSIFIED_GROUP_KEY = "sin-clasificar"
 PHOTO_BROWSER_ID = "photo-browser"
 
 
 @dataclass
 class Section:
-    """Un conjunto de tarjetas que comparten tag, y el encabezado que las agrupa."""
+    """Un conjunto de tarjetas que comparten tag, y el encabezado que las agrupa.
+
+    Las secciones de cubos usan la misma forma pero llevan fotos sueltas en vez de grupos:
+    un cubo nombra fotos, nohartes de viaje. Por eso las dos listas vienen con valor
+    por omision, y `count` cuenta lo que la seccion efectivamente tiene.
+    """
 
     tag: Optional[str]
     title: str
-    groups: list[Group]
+    groups: list[Group] = field(default_factory=list)
+    photos: list[Photo] = field(default_factory=list)
 
     @property
     def count(self) -> int:
-        return len(self.groups)
+        return len(self.groups) if self.groups else len(self.photos)
+
+    @property
+    def holds_photos(self) -> bool:
+        """Si la seccion lista fotos sueltas en lugar de tarjetas de grupo."""
+        return not self.groups and bool(self.photos)
 
 
 def _section_date(section: Section) -> str:
@@ -365,6 +392,20 @@ def _tag_catalog(tag_options: Sequence[str], groups: Sequence[Group]) -> str:
     return f'<datalist id="{TAG_CATALOG_ID}">{options}</datalist>'
 
 
+def _bucket_catalog(bucket_options: Sequence[str]) -> str:
+    """El `datalist` unico con los nombres de cubo que el selector ofrece.
+
+    Va aparte del catalogo de tags: son dos ejes distintos y un mismo nombre puede estar
+    en los dos sin significarse lo mismo, asi que no se mezclan en una sola lista.
+    """
+    if not bucket_options:
+        return ""
+    options = "".join(
+        f'<option value="{html.escape(name)}"></option>' for name in bucket_options
+    )
+    return f'<datalist id="{BUCKET_CATALOG_ID}">{options}</datalist>'
+
+
 def _group_card(
     group: Group,
     root: Path,
@@ -425,6 +466,9 @@ def _browser_overlay(token: Optional[str] = None) -> str:
     Es una sola pieza en el documento, no una por grupo: abrir un grupo la llena con la
     lista que pide el servidor, asi que no hay nada que preparar antes. Se emite solo
     cuando hay token, porque sin servidor no hay renders que pedir.
+
+    El selector de cubos va al lado del boton de marcar, pero aparte: marcar sigue siendo
+    un solo clic, y elegir cubos es una accion distinta que lleva su propia lista.
     """
     if token is None:
         return ""
@@ -446,6 +490,18 @@ def _browser_overlay(token: Optional[str] = None) -> str:
         f'<button type="button" class="browser-next" id="{PHOTO_BROWSER_ID}-next">'
         "Siguiente</button>"
         "</div>"
+        '<div class="bucket-controls"'
+        f' id="{PHOTO_BROWSER_ID}-buckets">'
+        f'<p class="bucket-title">Cubos</p>'
+        f'<div class="bucket-list" id="{PHOTO_BROWSER_ID}-bucket-list"></div>'
+        '<div class="bucket-new">'
+        f'<input class="bucket-input" type="text" list="{BUCKET_CATALOG_ID}"'
+        ' placeholder="Cubo" maxlength="60">'
+        f'<button type="button" class="bucket-add" id="{PHOTO_BROWSER_ID}-bucket-add">'
+        "Agregar</button>"
+        "</div>"
+        f'<p class="bucket-error" id="{PHOTO_BROWSER_ID}-bucket-error" hidden></p>'
+        "</div>"
         "</div>"
     )
 
@@ -457,12 +513,41 @@ def _section_html(
     token: Optional[str] = None,
     tag_options: Sequence[str] = (),
 ) -> str:
-    """Una seccion de tarjetas que comparten tag.
+    """Una seccion de tarjetas o de fotos.
 
-    El encabezado es tambien zona de destino: soltar una tarjeta ahi le asigna el tag de
-    la seccion. La de "Sin tag" lleva el atributo vacio, que es lo que hace que soltar
-    ahi le quite el tag en lugar de asignarle una cadena vacia.
+    El encabezado de las secciones de grupo es tambien zona de destino: soltar una tarjeta
+    ahi le asigna el tag de la seccion. La de "Sin tag" lleva el atributo vacio, que es lo
+    que hace que soltar ahi le quite el tag en lugar de asignarle una cadena vacia.
+
+    Las secciones de fotos sueltas no llevan `data-drop` a proposito: no se puede arrastrar
+    un grupo de viaje a un cubo, porque un cubo nombra fotos y no tarjetas. Sin el atributo,
+    soltar ahi no encuentra destino y no se guarda nada.
     """
+    if section.holds_photos:
+        # El encabezado cuenta las fotos que tiene la seccion, no las que se dibujan: si
+        # hay mas que el tope, el aviso dice cuantas se quedaron afuera.
+        visibles = section.photos[:PHOTOS_PER_SECTION]
+        cards = "".join(_flat_card(photo, root) for photo in visibles)
+        plural = "foto" if section.count == 1 else "fotos"
+        if len(visibles) < section.count:
+            restantes = section.count - len(visibles)
+            plural_resto = "foto" if restantes == 1 else "fotos"
+            aviso = (
+                f'<p class="vacio">Se muestran {len(visibles)} de {section.count}. '
+                f"Las otras {restantes} {plural_resto} no se dibujan para que la pagina "
+                "no se vuelva interminable: usá el recorrido del grupo para verlas.</p>"
+            )
+        else:
+            aviso = ""
+        return (
+            f'<section class="photo-section">'
+            f'<h2 class="tag-section-title">{html.escape(section.title)}'
+            f'<span class="tag-section-count">{section.count} {plural}</span></h2>'
+            f'<div class="grid">{cards}</div>'
+            f"{aviso}"
+            "</section>"
+        )
+
     drop = html.escape(section.tag or "")
     cards = "".join(
         _group_card(group, root, labels, token, tag_options) for group in section.groups
@@ -542,16 +627,16 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .browse-open:hover { background: #363b42; }
 .browser { position: fixed; inset: 0; z-index: 50; display: flex;
            flex-direction: column; align-items: center; gap: 12px; padding: 16px;
-           background: #0b0c0e; color: #e8eaed; }
+           background: #0b0c0e; color: #e8eaed; overflow-y: auto; }
 .browser[hidden] { display: none; }
 .browser-bar { display: flex; align-items: center; gap: 12px; width: 100%;
-               max-width: 1100px; }
+               max-width: 1100px; flex: 0 0 auto; }
 .browser-title { margin: 0; font-size: 14px; }
 .browser-position { margin: 0 auto 0 0; font-size: 13px; color: #9aa3ad; }
-.browser-image { max-width: 100%; max-height: 78vh; object-fit: contain;
-                 background: #000; }
+.browser-image { max-width: 100%; max-height: 52vh; object-fit: contain;
+                 background: #000; flex: 0 1 auto; }
 .browser-status { margin: 0; min-height: 1em; font-size: 12px; color: #9aa3ad; }
-.browser-actions { display: flex; gap: 10px; }
+.browser-actions { display: flex; gap: 10px; flex: 0 0 auto; }
 .browser-actions button, .browser-close { font: inherit; font-size: 13px;
              cursor: pointer; padding: 7px 14px; border-radius: 6px;
              border: 1px solid #3c4149; background: #2c3036; color: #e8eaed; }
@@ -793,6 +878,35 @@ EDIT_SCRIPT = """
     });
   });
 
+  // Las secciones de fotos no son zona de destino: un cubo nombra fotos, no tarjetas de
+  // viaje, asi que arrastrar un grupo ahi no tiene sentido. Se avisa en vez de dejar que
+  // el navegador haga lo que quiera con el gesto, y no se guarda nada.
+  document.querySelectorAll(".photo-section").forEach(function (seccion) {
+    seccion.addEventListener("dragover", function (evento) {
+      evento.preventDefault();
+      evento.dataTransfer.dropEffect = "none";
+    });
+
+    seccion.addEventListener("drop", function (evento) {
+      evento.preventDefault();
+      arrastrando = null;
+      limpiarDestinos();
+      avisarDestino(seccion, "Los cubos nombran fotos, no viajes: arrastrá la foto desde el recorrido.");
+    });
+  });
+
+  function avisarDestino(seccion, mensaje) {
+    var aviso = seccion.parentNode.querySelector(".destino-rechazado");
+    if (!aviso) {
+      aviso = document.createElement("p");
+      aviso.className = "destino-rechazado";
+      aviso.hidden = true;
+      seccion.parentNode.insertBefore(aviso, seccion);
+    }
+    aviso.textContent = mensaje;
+    aviso.hidden = false;
+  }
+
   function soltar(origen, tagDestino) {
     var control = origen.querySelector(".tag-controls");
     if (!control) { return; }
@@ -831,10 +945,27 @@ EDIT_SCRIPT = """
     var botonPrevio = document.getElementById("photo-browser-prev");
     var botonSiguiente = document.getElementById("photo-browser-next");
     var botonCerrar = document.getElementById("photo-browser-close");
+    var listaCubos = document.getElementById("photo-browser-bucket-list");
+    var entradaCubo = document.querySelector("#photo-browser .bucket-input");
+    var botonCubo = document.getElementById("photo-browser-bucket-add");
+    var errorCubo = document.getElementById("photo-browser-bucket-error");
 
     var lista = [];
     var indice = 0;
     var urlActual = null;
+
+    // El catalogo y la pertenencia llegan en la pagina, asi que el selector pinta de
+    // entrada lo que ya tiene la foto, sin preguntar y sin recargar. `cubosDe` es la
+    // copia que se va actualizando con lo que el servidor confirma: es la que manda al
+    // pintar, asi que un rechazo devuelve la foto a lo que el servidor de verdad tiene.
+    var datos = JSON.parse(
+      document.getElementById("viewer-data").textContent
+    );
+    var nombresCubos = datos.photo_tags || [];
+    var cubosDe = {};
+    Object.keys(datos.photo_tagged || {}).forEach(function (sha) {
+      cubosDe[sha] = datos.photo_tagged[sha].slice();
+    });
 
     function soltarImagen() {
       if (urlActual) {
@@ -846,6 +977,95 @@ EDIT_SCRIPT = """
     function pintarMarca(foto) {
       botonMarcar.setAttribute("aria-pressed", foto.marked ? "true" : "false");
       botonMarcar.textContent = foto.marked ? "Quitar la marca" : "Marcar";
+    }
+
+    function mostrarErrorCubo(mensaje) {
+      if (!errorCubo) { return; }
+      errorCubo.textContent = mensaje || "";
+      errorCubo.hidden = !mensaje;
+    }
+
+    function pintarCubos(foto) {
+      if (!listaCubos) { return; }
+      listaCubos.textContent = "";
+      if (!foto) { return; }
+      // Un control por nombre del catalogo. Un nombre que la foto no tiene queda
+      // apagado, no desaparece: asi se ve que existe y que se puede sumar.
+      var actuales = cubosDe[foto.sha256] || [];
+      nombresCubos.forEach(function (nombre) {
+        var boton = document.createElement("button");
+        boton.type = "button";
+        boton.className = "bucket-toggle";
+        boton.setAttribute("data-bucket", nombre);
+        var loTiene = actuales.indexOf(nombre) !== -1;
+        boton.setAttribute("aria-pressed", loTiene ? "true" : "false");
+        boton.textContent = loTiene ? nombre + " ✓" : nombre;
+        boton.addEventListener("click", function () {
+          cambiarCubo(foto, nombre, loTiene);
+        });
+        listaCubos.appendChild(boton);
+      });
+      if (entradaCubo) {
+        entradaCubo.value = "";
+      }
+      mostrarErrorCubo("");
+    }
+
+    function cambiarCubo(foto, nombre, loTiene) {
+      if (!foto) { return; }
+      fetch("/api/photo-tags", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Fotos-Plus-Token": token
+        },
+        body: JSON.stringify({
+          action: loTiene ? "remove" : "add",
+          sha256: foto.sha256,
+          bucket: nombre,
+          token: token
+        })
+      }).then(function (respuesta) {
+        return respuesta.json().then(function (datos) {
+          if (!respuesta.ok) {
+            throw new Error(datos.error || "No se pudo guardar el cubo");
+          }
+          return datos;
+        });
+      }).then(function (datos) {
+        // La respuesta trae la pertenencia ya guardada: se copia esa y se repinta, sin
+        // recargar la pagina. Asi lo que se ve es siempre lo que el servidor tiene.
+        cubosDe[foto.sha256] = datos.buckets || [];
+        pintarCubos(foto);
+      }).catch(function (error) {
+        // Rechazo: se avisa el motivo y se repinta desde `cubosDe`, que todavia tiene
+        // lo que el servidor dio la ultima vez, asi que la foto vuelve a su estado real.
+        mostrarErrorCubo(error.message);
+        pintarCubos(foto);
+      });
+    }
+
+    function agregarCubo() {
+      var foto = lista[indice];
+      if (!foto || !entradaCubo) { return; }
+      var nombre = entradaCubo.value;
+      if (!nombre || !nombre.trim()) {
+        mostrarErrorCubo("Escribí un nombre de cubo");
+        return;
+      }
+      cambiarCubo(foto, nombre.trim(), false);
+    }
+
+    if (botonCubo) {
+      botonCubo.addEventListener("click", agregarCubo);
+    }
+    if (entradaCubo) {
+      entradaCubo.addEventListener("keydown", function (evento) {
+        if (evento.key === "Enter") {
+          evento.preventDefault();
+          agregarCubo();
+        }
+      });
     }
 
     function mostrar(indiceNuevo) {
@@ -860,6 +1080,9 @@ EDIT_SCRIPT = """
       posicion.textContent = (indice + 1) + " de " + lista.length
         + (fecha ? " \\u00b7 " + fecha : "");
       pintarMarca(foto);
+      // Al cambiar de foto el selector se repinta con los cubos de esa foto, no los de
+      // la anterior.
+      pintarCubos(foto);
       estado.textContent = "";
       soltarImagen();
       fetch("/render?ref=" + encodeURIComponent(foto.ref), {
@@ -905,6 +1128,7 @@ EDIT_SCRIPT = """
       soltarImagen();
       imagen.removeAttribute("src");
       lista = [];
+      pintarCubos(null);
     }
 
     function alternarMarca() {
@@ -978,6 +1202,77 @@ EDIT_SCRIPT = """
 """
 
 
+def photo_sections(
+    photos: Iterable[Photo],
+    marked: Iterable[str] = (),
+    photo_tags: Sequence[str] = (),
+    photo_tagged: Optional[Mapping[str, Sequence[str]]] = None,
+) -> list[Section]:
+    """Las secciones de fotos sueltas: las marcadas y las de cada cubo.
+
+    El orden es fijo y no depende de las fechas, porque estos nombres los escribio la
+    persona y no losymlcoloco una agrupacion automatica: primero las marcadas, despues los
+    cubos en el orden en que estan guardados, y al final las fotos que no estan en ningun
+    cubo.
+
+    Un nombre del catalogo que no tiene ninguna foto no produce seccion: la vacia no le
+    aporta nada a quien esta mirando. Una foto que esta en varios cubos aparece en cada
+    uno, porque de eso se trata.
+    """
+    marcas = frozenset(marked)
+    buckets = photo_tagged or {}
+    # El indice manda sobre el archivo: una pertenencia a una foto que ya no existe no
+    # llega a la seccion, aunque el nombre siga en el archivo.
+    presentes = {photo.sha256: photo for photo in photos}
+
+    sections: list[Section] = []
+
+    marcadas = [
+        presentes[sha256] for sha256 in marcas if sha256 in presentes
+    ]
+    if marcadas:
+        sections.append(
+            Section(
+                tag=None,
+                title=MARKED_SECTION_TITLE,
+                photos=sorted(marcadas, key=_photo_sort_key),
+            )
+        )
+
+    for nombre in photo_tags:
+        en_este = [
+            presentes[sha256]
+            for sha256 in buckets
+            if sha256 in presentes and nombre in buckets[sha256]
+        ]
+        if en_este:
+            sections.append(
+                Section(
+                    tag=None,
+                    title=nombre,
+                    photos=sorted(en_este, key=_photo_sort_key),
+                )
+            )
+
+    # Lo que no esta en ningun cubo. Se omiten las fotos del catalogo que no existen, que
+    # ya se filtraron arriba.
+    sin_cubos = [
+        presentes[sha256]
+        for sha256 in presentes
+        if sha256 not in buckets or not buckets[sha256]
+    ]
+    if sin_cubos:
+        sections.append(
+            Section(
+                tag=None,
+                title=UNTAGGED_PHOTOS_TITLE,
+                photos=sorted(sin_cubos, key=_photo_sort_key),
+            )
+        )
+
+    return sections
+
+
 def _drift_notice(drift: Optional["LabelResolution"]) -> str:
     """Aviso de que el escaneo se movio y algunas ediciones quedaron sin grupo."""
     if drift is None or not drift.drifted:
@@ -1005,6 +1300,8 @@ def render_html(
     drift: Optional["LabelResolution"] = None,
     tag_options: Sequence[str] = (),
     marked: Optional[Iterable[str]] = None,
+    photo_tags: Sequence[str] = (),
+    photo_tagged: Optional[Mapping[str, Sequence[str]]] = None,
 ) -> str:
     """Genera el documento del visor.
 
@@ -1016,11 +1313,19 @@ def render_html(
 
     `marked` son los hashes de las fotos marcadas. Solo se usa cuando hay token: sin
     servidor el HTML exportado no lleva el inventario ni las marcas.
+
+    `photo_tags` y `photo_tagged` son el catalogo de cubos y la pertenencia de cada foto.
+    Tambien solo se usan cuando hay token, por la misma razon que las marcas.
     """
     labels = labels or {}
     editable = token is not None
-    if not editable:
-        marked = None
+
+    # Lo que se muestra y lo que se embebido son dos cosas. El HTML exportado tambiem
+    # muestra las secciones de marcadas y de cubos, asi que las marcas y la pertenencia
+    # se usan para pintar en los dos casos; lo que no viaja en el export es el inventario
+    # del payload, porque sin servidor no hay quien lo use. Por eso la inclusion va aparte
+    # de `editable`.
+    inventory = editable
 
     if flat:
         cards = "".join(
@@ -1036,17 +1341,39 @@ def render_html(
         # Con tags asignados las tarjetas van en secciones; sin tags, en una sola
         # grilla ordenada por fecha, que es como se veia antes de que existieran.
         sections = group_sections(groups)
+        # Las secciones de fotos van despues de las de grupo: primero se ordena el viaje
+        # y despues se repasa foto por foto lo que quedo apuntado. Si no hay nada de
+        # ninguna de las dos, el documento queda como estaba, en una sola grilla.
+        secciones_fotos = (
+            photo_sections(
+                (photo for group in groups for photo in group.photos),
+                marked or (),
+                photo_tags,
+                photo_tagged,
+            )
+            # Sin marcas ni cubos no hay nada que repasar foto por foto: la pagina queda
+            # como estaba, con las tarjetas de grupo en su grilla de siempre.
+            if marked or photo_tags or photo_tagged
+            else []
+        )
+        # Las tarjetas de grupo van en secciones si hay tags y en una sola grilla si no
+        # los hay. Las de fotos se suman despues en cualquier caso: son un repaso aparte
+        # y no reemplazan la vista de los viajes.
         if sections:
-            body = "".join(
+            tarjetas = "".join(
                 _section_html(section, Path(root), labels, token, tag_options)
                 for section in sections
             )
         else:
             cards = "".join(
-                _group_card(group, Path(root), labels, token, tag_options)
+                _group_card(group, root, labels, token, tag_options)
                 for group in groups
             )
-            body = f'<div class="grid">{cards}</div>'
+            tarjetas = f'<div class="grid">{cards}</div>'
+        body = tarjetas + "".join(
+            _section_html(section, Path(root), labels, token, tag_options)
+            for section in secciones_fotos
+        )
         title = "Viajes y periodos sugeridos"
         subtitle = "sugerencias sin confirmar: no son definitivas"
 
@@ -1063,6 +1390,7 @@ def render_html(
     # El catalogo de tags solo aparece en la pagina servida: sin servidor no hay a quien
     # elegirle un tag.
     catalog = _tag_catalog(tag_options, groups) if editable else ""
+    buckets = _bucket_catalog(photo_tags) if editable else ""
     browser = _browser_overlay(token) if editable else ""
 
     return (
@@ -1080,9 +1408,10 @@ def render_html(
         f"{_drift_notice(drift)}"
         f"{body}\n"
         f"{catalog}"
+        f"{buckets}"
         f"{browser}"
         '<script type="application/json" id="viewer-data">'
-        f"{json.dumps(_payload(groups, root, flat, marked), ensure_ascii=False)}"
+        f"{json.dumps(_payload(groups, root, flat, inventory, marked or (), photo_tags, photo_tagged), ensure_ascii=False)}"
         "</script>\n"
         f"{script}"
         "</body>\n"
@@ -1091,7 +1420,13 @@ def render_html(
 
 
 def _payload(
-    groups: list[Group], root: str, flat: bool, marked: Optional[Iterable[str]] = None
+    groups: list[Group],
+    root: str,
+    flat: bool,
+    inventory: bool = False,
+    marked: Iterable[str] = (),
+    photo_tags: Sequence[str] = (),
+    photo_tagged: Optional[Mapping[str, Sequence[str]]] = None,
 ) -> dict:
     """Los datos que el visor embebe en la pagina.
 
@@ -1099,13 +1434,14 @@ def _payload(
     tarjetas y nada mas. Servida, cada grupo ademas trae su referencia y cuantas fotos
     tiene marcadas, que es lo que la tarjeta necesita para abrir el recorrido sin
     tener que preguntar antes. Las fotos sueltas no van aqui, se piden por grupo.
+
+    Servida tambien viajan el catalogo de cubos y la pertenencia de cada foto, porque el
+    selector del recorrido los necesita para pintar de entrada lo que ya tiene la foto
+    mostrada, sin esperar a que el usuario toque algo. Sin servidor no viajan: el
+    documento exportado no lleva inventario, igual que no lleva las marcas.
     """
-    if marked is None:
-        marks: frozenset = frozenset()
-        served = False
-    else:
-        marks = frozenset(marked)
-        served = True
+    served = inventory
+    marks = frozenset(marked) if served else frozenset()
 
     payload_groups = []
     for group in groups:
@@ -1124,10 +1460,20 @@ def _payload(
             )
         payload_groups.append(entry)
 
-    return {
+    payload: dict = {
         "flat": flat,
         "groups": payload_groups,
     }
+
+    if served:
+        payload["photo_tags"] = list(photo_tags)
+        payload["photo_tagged"] = {
+            sha256: list(names)
+            for sha256, names in (photo_tagged or {}).items()
+            if names
+        }
+
+    return payload
 
 
 def build_view(index_path: Path) -> tuple[str, bool]:
@@ -1161,6 +1507,9 @@ def build_view(index_path: Path) -> tuple[str, bool]:
     groups = assign_groups(
         result.photos, suggestions, labels=resolution.labels, tags=resolution.tags
     )
+    # Las marcas y los cubos llegan igual que en la pagina servida, para que el export
+    # muestre las mismas secciones. Lo que no viaja es el inventario del payload, porque
+    # el documento es de solo lectura: `token=None` se encarga de eso.
     return (
         render_html(
             groups,
@@ -1170,6 +1519,9 @@ def build_view(index_path: Path) -> tuple[str, bool]:
             token=None,
             drift=resolution,
             tag_options=overlay.tags,
+            marked=overlay.marked,
+            photo_tags=overlay.photo_tags,
+            photo_tagged=overlay.photo_tagged,
         ),
         False,
     )

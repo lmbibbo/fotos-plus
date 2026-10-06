@@ -59,13 +59,22 @@ content SHALL resolve to the same mark.
 - **WHEN** one of them is marked
 - **THEN** the other one is reported as marked as well
 
-### Requirement: Marks are stored in the edition file at version 3
+### Requirement: Marks are stored in the edition file at the current version
 
-The edition file SHALL declare version 3 and SHALL store marks as a flat list of content hashes,
-independent of the keys that index labels and tags. Edition files at versions 1 and 2 SHALL remain
-readable and SHALL load with no marks, keeping the labels, tag catalogue and tag assignments they
-already held. Reading an edition file SHALL NOT by itself rewrite it to a newer version. A mark
-entry that is not 64 lowercase hexadecimal characters SHALL be rejected when the file is written.
+The edition file SHALL declare the current version, which is 4, and SHALL store marks as a flat
+list of content hashes, independent of the keys that index labels, tags and buckets. Edition files
+at versions 1, 2 and 3 SHALL remain readable and SHALL load with no marks, keeping the labels, tag
+catalogue, tag assignments and bucket assignments they already held. Reading an edition file SHALL
+NOT by itself rewrite it to a newer version. A mark entry that is not 64 lowercase hexadecimal
+characters SHALL be rejected when the file is written.
+
+#### Scenario: A version 3 edition file loads with no marks
+
+- **GIVEN** an edition file at version 3 holding labels, tags, tag assignments and buckets
+- **WHEN** the file is read
+- **THEN** the labels, tag catalogue, tag assignments and buckets are all preserved
+- **AND** the photo list is empty
+- **AND** the file on disk still declares version 3
 
 #### Scenario: A version 2 edition file loads with no marks
 
@@ -84,9 +93,9 @@ entry that is not 64 lowercase hexadecimal characters SHALL be rejected when the
 
 #### Scenario: The first mark upgrades the file
 
-- **GIVEN** an edition file at version 2 with tags already saved
+- **GIVEN** an edition file at version 3 with tags already saved
 - **WHEN** the user marks a photo and the edit is saved
-- **THEN** the file declares version 3
+- **THEN** the file declares version 4
 - **AND** it holds the tag catalogue, the tag assignments and the mark
 
 #### Scenario: A malformed mark is rejected on write
@@ -196,3 +205,57 @@ browsing past it.
 - **GIVEN** an unmarked photo displayed in the viewer
 - **WHEN** the user marks it
 - **THEN** the viewer shows it as marked without reloading the page
+
+### Requirement: Marks are browsable as their own section
+
+The landing page MUST present the marked photos in a section of their own, separate from the group
+sections and from the photo bucket sections, so that the shortlist a curation pass produces can be
+looked at after the pass is over. That section MUST list the photos themselves rather than the
+groups they belong to, MUST order them by the same order the photos are browsed in, and MUST report
+how many photos it holds. A library with no marks MUST NOT produce that section. The section MUST
+NOT be editable by dragging anything onto it, and dragging a group card onto it MUST NOT change any
+mark, because a mark is not a bucket and the two are not interchangeable.
+
+The marks section MUST appear in the exported HTML as well as in the served viewer. This is the
+first place a mark is visible outside the served browser, and it MUST NOT make the export editable:
+the section there is read-only, exactly as the rest of the export is.
+
+#### Scenario: The marked photos get a section
+
+- **GIVEN** a library in which three photos are marked and the rest are not
+- **WHEN** the landing page is generated
+- **THEN** a section for marked photos appears, listing those three photos
+- **AND** it reports that it holds three photos
+
+#### Scenario: Marked photos keep their browse order
+
+- **GIVEN** a library in which two marked photos sit in the same group, one captured earlier
+- **WHEN** the landing page is generated
+- **THEN** the earlier one is listed before the later one in the marked photos section
+
+#### Scenario: No marks means no section
+
+- **GIVEN** an edition file holding no marks
+- **WHEN** the landing page is generated
+- **THEN** no marked photos section appears
+
+#### Scenario: A card dragged onto the marked section changes nothing
+
+- **GIVEN** a running server and a group card with no bucket assigned
+- **WHEN** the user drags that card onto the marked photos section
+- **THEN** the card's group tag is unchanged
+- **AND** the stored marks are unchanged
+
+#### Scenario: The marks section is visible in the export
+
+- **GIVEN** an edition file holding marks
+- **WHEN** the exported HTML is generated with `view` and no `--serve`
+- **THEN** the marked photos section appears in the export
+- **AND** it offers no control to change any mark
+
+#### Scenario: Unmarking removes the photo from the section
+
+- **GIVEN** a marked photo that appears in the marked photos section
+- **WHEN** the user unmarks it in the served browser
+- **THEN** the photo is no longer stored as marked
+- **AND** it is not listed in the marked photos section on the next generation of the page

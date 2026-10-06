@@ -117,8 +117,8 @@ def serving(tmp_path: Path):
 
     started: list = []
 
-    def factory(index_path: Path, port: int | None = None):
-        server, actual, token = start_edit_server(index_path, port=port)
+    def factory(index_path: Path, port: int | None = None, dev: bool = False):
+        server, actual, token = start_edit_server(index_path, port=port, dev=dev)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         started.append((server, thread))
@@ -1377,3 +1377,284 @@ def test_a_reopened_browser_reports_the_new_mark_state(tmp_path: Path, serving) 
 
     assert listing["photos"][0]["marked"] is True
     assert listing["marked_count"] == 1
+
+
+# --- 4.4 endpoint de cubos ---------------------------------------------------
+
+
+def bucket_index(tmp_path: Path) -> Path:
+    return build_index(tmp_path, shas=("a" * 64, "b" * 64))
+
+
+def bucket_post(url: str, token: str, body: dict):
+    return post(f"{url}/api/photo-tags", token, {"token": token, **body})
+
+
+def test_a_bucket_is_saved_with_its_catalogue_and_its_membership(tmp_path: Path, serving) -> None:
+    index_path = bucket_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data = bucket_post(
+        url, token, {"action": "add", "sha256": "a" * 64, "bucket": "Favoritas"}
+    )
+
+    assert status == 200
+    assert data["buckets"] == ["Favoritas"]
+    overlay = read_edicion(edicion_path_next_to(index_path))
+    assert overlay.photo_tags == ["Favoritas"]
+    assert overlay.photo_tagged == {"a" * 64: ["Favoritas"]}
+
+
+def test_the_same_photo_can_join_a_second_bucket(tmp_path: Path, serving) -> None:
+    index_path = bucket_index(tmp_path)
+    url, token = serving(index_path)
+    bucket_post(url, token, {"action": "add", "sha256": "a" * 64, "bucket": "Favoritas"})
+
+    status, data = bucket_post(
+        url, token, {"action": "add", "sha256": "a" * 64, "bucket": "Para imprimir"}
+    )
+
+    assert status == 200
+    assert data["buckets"] == ["Favoritas", "Para imprimir"]
+    overlay = read_edicion(edicion_path_next_to(index_path))
+    assert overlay.photo_tagged == {"a" * 64: ["Favoritas", "Para imprimir"]}
+
+
+def test_a_bucket_is_not_added_twice(tmp_path: Path, serving) -> None:
+    index_path = bucket_index(tmp_path)
+    url, token = serving(index_path)
+    bucket_post(url, token, {"action": "add", "sha256": "a" * 64, "bucket": "Favoritas"})
+
+    status, _ = bucket_post(
+        url, token, {"action": "add", "sha256": "a" * 64, "bucket": "favoritas"}
+    )
+
+    assert status == 200
+    overlay = read_edicion(edicion_path_next_to(index_path))
+    assert overlay.photo_tagged == {"a" * 64: ["Favoritas"]}
+    assert overlay.photo_tags == ["Favoritas"]
+
+
+def test_removing_a_bucket_keeps_the_other_buckets_and_the_catalogue(
+    tmp_path: Path, serving
+) -> None:
+    index_path = bucket_index(tmp_path)
+    url, token = serving(index_path)
+    bucket_post(url, token, {"action": "add", "sha256": "a" * 64, "bucket": "Favoritas"})
+    bucket_post(url, token, {"action": "add", "sha256": "a" * 64, "bucket": "Para imprimir"})
+    bucket_post(url, token, {"action": "add", "sha256": "b" * 64, "bucket": "Favoritas"})
+
+    status, data = bucket_post(
+        url, token, {"action": "remove", "sha256": "a" * 64, "bucket": "Favoritas"}
+    )
+
+    assert status == 200
+    assert data["buckets"] == ["Para imprimir"]
+    overlay = read_edicion(edicion_path_next_to(index_path))
+    assert overlay.photo_tagged == {"a" * 64: ["Para imprimir"], "b" * 64: ["Favoritas"]}
+    # El catalogo no se borra cuando un cubo se queda sin fotos.
+    assert overlay.photo_tags == ["Favoritas", "Para imprimir"]
+
+
+def test_removing_a_bucket_the_photo_never_had_is_rejected(tmp_path: Path, serving) -> None:
+    index_path = bucket_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data = bucket_post(
+        url, token, {"action": "remove", "sha256": "a" * 64, "bucket": "Favoritas"}
+    )
+
+    assert status == 400
+    assert data["error"]
+
+
+def test_an_unknown_bucket_action_is_rejected(tmp_path: Path, serving) -> None:
+    index_path = bucket_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data = bucket_post(
+        url, token, {"action": "clear", "sha256": "a" * 64, "bucket": "Favoritas"}
+    )
+
+    assert status == 400
+    assert data["error"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["", "   ", "\t\n"],
+    ids=["empty", "spaces", "whitespace-mix"],
+)
+def test_an_empty_or_whitespace_only_bucket_name_is_rejected(
+    tmp_path: Path, serving, name: str
+) -> None:
+    index_path = bucket_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data = bucket_post(
+        url, token, {"action": "add", "sha256": "a" * 64, "bucket": name}
+    )
+
+    assert status == 400
+    assert data["error"]
+    assert not edicion_path_next_to(index_path).exists()
+
+
+def test_a_hash_that_belongs_to_no_photo_is_rejected(tmp_path: Path, serving) -> None:
+    index_path = bucket_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data = bucket_post(
+        url, token, {"action": "add", "sha256": "c" * 64, "bucket": "Favoritas"}
+    )
+
+    assert status == 400
+    assert data["error"]
+    assert not edicion_path_next_to(index_path).exists()
+
+
+@pytest.mark.parametrize(
+    "sha",
+    ["abc", "a" * 63, "a" * 65, "g" * 64, "a" * 63 + " "],
+    ids=["short", "one-short", "one-long", "not-hex", "trailing-space"],
+)
+def test_a_malformed_hash_is_rejected(tmp_path: Path, serving, sha: str) -> None:
+    index_path = bucket_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data = bucket_post(url, token, {"action": "add", "sha256": sha, "bucket": "Favoritas"})
+
+    assert status == 400
+    assert data["error"]
+    assert not edicion_path_next_to(index_path).exists()
+
+
+def test_a_bucket_post_without_a_token_writes_nothing(tmp_path: Path, serving) -> None:
+    index_path = bucket_index(tmp_path)
+    url, token = serving(index_path)
+
+    # Sin token en el cuerpo: el encabezado solo no alcanza.
+    status, data = post(
+        f"{url}/api/photo-tags",
+        token,
+        {"action": "add", "sha256": "a" * 64, "bucket": "Favoritas"},
+    )
+
+    assert status == 403
+    assert data["error"]
+    assert not edicion_path_next_to(index_path).exists()
+
+
+def test_a_bucket_post_with_a_wrong_token_writes_nothing(tmp_path: Path, serving) -> None:
+    index_path = bucket_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data = post(
+        f"{url}/api/photo-tags",
+        token,
+        {"action": "add", "sha256": "a" * 64, "bucket": "Favoritas", "token": "wrong"},
+    )
+
+    assert status == 403
+    assert data["error"]
+    assert not edicion_path_next_to(index_path).exists()
+
+
+def test_a_bucket_post_rejects_a_non_loopback_host(tmp_path: Path, serving) -> None:
+    index_path = bucket_index(tmp_path)
+    url, token = serving(index_path)
+    body = json.dumps(
+        {"action": "add", "sha256": "a" * 64, "bucket": "Favoritas", "token": token}
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        f"{url}/api/photo-tags",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Fotos-Plus-Token": token,
+            "Host": "evil.example",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as respuesta:
+            status = respuesta.status
+    except urllib.error.HTTPError as error:
+        status = error.code
+
+    assert status == 400
+    assert not edicion_path_next_to(index_path).exists()
+
+
+def test_a_bucket_post_requires_a_json_content_type(tmp_path: Path, serving) -> None:
+    index_path = bucket_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data = bucket_post(
+        url, token, {"action": "add", "sha256": "a" * 64, "bucket": "Favoritas"}
+    )
+    assert status == 200
+
+    # Un cuerpo que no es JSON se rechaza antes de tocar el archivo.
+    request = urllib.request.Request(
+        f"{url}/api/photo-tags",
+        data=b"bucket=Favoritas",
+        headers={
+            "Content-Type": "text/plain",
+            "X-Fotos-Plus-Token": token,
+            "Host": "127.0.0.1",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as respuesta:
+            status = respuesta.status
+    except urllib.error.HTTPError as error:
+        status = error.code
+
+    assert status == 415
+    # Lo de antes sigue en su sitio: el rechazo no toco el archivo.
+    assert read_edicion(edicion_path_next_to(index_path)).photo_tags == ["Favoritas"]
+
+
+def test_a_bucket_edit_leaves_the_marks_and_labels_untouched(tmp_path: Path, serving) -> None:
+    index_path = bucket_index(tmp_path)
+    url, token = serving(index_path)
+    mark(url, token, "mark", "a.jpg")
+
+    status, _ = bucket_post(
+        url, token, {"action": "add", "sha256": "a" * 64, "bucket": "Favoritas"}
+    )
+
+    assert status == 200
+    overlay = read_edicion(edicion_path_next_to(index_path))
+    assert overlay.marked == ["a" * 64]
+    assert overlay.photo_tagged == {"a" * 64: ["Favoritas"]}
+
+
+def test_dev_mode_rebuilds_the_page_every_time(tmp_path: Path, serving) -> None:
+    """En modo dev la pagina se regenera en cada request, sin cache."""
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path, dev=True)
+
+    req = urllib.request.Request(f"{url}/", headers={"Host": "127.0.0.1"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        primera = r.read()
+    with urllib.request.urlopen(req, timeout=10) as r:
+        segunda = r.read()
+
+    assert primera == segunda
+
+
+def test_without_dev_mode_the_page_is_cached(tmp_path: Path, serving) -> None:
+    """Sin modo dev la pagina se construye una sola vez."""
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path, dev=False)
+
+    req = urllib.request.Request(f"{url}/", headers={"Host": "127.0.0.1"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        primera = r.read()
+    with urllib.request.urlopen(req, timeout=10) as r:
+        segunda = r.read()
+
+    assert primera == segunda
