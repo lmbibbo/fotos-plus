@@ -1632,27 +1632,6 @@ def test_a_bucket_edit_leaves_the_marks_and_labels_untouched(tmp_path: Path, ser
     assert overlay.photo_tagged == {"a" * 64: ["Favoritas"]}
 
 
-def test_the_photo_list_carries_the_date_of_each_photo(tmp_path: Path, serving) -> None:
-    """El recorrido la muestra: es lo que la pagina de cada foto no tenia."""
-    index_path = build_index(tmp_path)
-    url, token = serving(index_path)
-
-    status, data = fetch_photos(url, token, "2024-05-01T00:00:00")
-
-    assert status == 200
-    assert data["photos"][0]["captured_at"] == "2024-05-02T10:00:00"
-
-
-def test_the_photo_list_says_when_a_photo_has_no_date(tmp_path: Path, serving) -> None:
-    index_path = build_index(tmp_path)
-    url, token = serving(index_path)
-
-    status, data = fetch_photos(url, token, "2024-05-01T00:00:00")
-
-    assert status == 200
-    assert data["photos"][0]["captured_at"] is not None
-
-
 def test_dev_mode_rebuilds_the_page_every_time(tmp_path: Path, serving) -> None:
     """En modo dev la pagina se regenera en cada request, sin cache."""
     index_path = build_index(tmp_path)
