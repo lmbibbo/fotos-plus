@@ -853,7 +853,12 @@ EDIT_SCRIPT = """
       // foto en lugar de dar la vuelta o salirse del grupo.
       indice = Math.max(0, Math.min(indiceNuevo, lista.length - 1));
       var foto = lista[indice];
-      posicion.textContent = (indice + 1) + " de " + lista.length;
+      // The capture date rides along with the photo and is shown next to the position.
+      // It is sliced to the date only; the served value keeps the full timestamp.
+      // An undated photo leaves the line exactly as it was, with no placeholder.
+      var fecha = foto.captured_at ? foto.captured_at.slice(0, 10) : "";
+      posicion.textContent = (indice + 1) + " de " + lista.length
+        + (fecha ? " \\u00b7 " + fecha : "");
       pintarMarca(foto);
       estado.textContent = "";
       soltarImagen();
