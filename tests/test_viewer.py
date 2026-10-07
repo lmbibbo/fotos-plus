@@ -1419,7 +1419,8 @@ def test_the_browser_asks_the_server_for_the_photo(tmp_path: Path) -> None:
 
     document = _browser_html(root, ["a.jpg"])
 
-    assert 'fetch("/render?ref=" + encodeURIComponent(foto.ref)' in document
+    assert 'fetch(rutaFijo + encodeURIComponent(foto.ref)' in document
+    assert 'var rutaFijo = esVideo ? "/poster?ref=" : "/render?ref=";' in document
     assert '"X-Fotos-Plus-Token": token' in document
     assert "URL.createObjectURL(blob)" in document
     assert "URL.revokeObjectURL(urlActual)" in document
@@ -2219,3 +2220,92 @@ def test_the_photo_browser_can_scroll_to_the_bucket_controls() -> None:
     assert re.search(r"\.browser\s*\{[^}]*overflow-y:\s*auto", CSS)
     # Y la imagen tiene que dejarles lugar: a 78vh no sobra espacio para nada mas.
     assert "max-height: 78vh" not in CSS
+
+
+# --- videos phase 1: posters, tiles, stills ------------------------------------
+
+
+def video_item(name: str, captured_at: str | None, duration_s: float | None = 12.5):
+    item = photo(name, captured_at)
+    item.extension = ".mp4"
+    item.kind = "video"
+    item.duration_s = duration_s
+    return item
+
+
+def _video_group_html(tmp_path: Path, **kwargs) -> str:
+    from tests.test_video import make_video
+
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+    make_video(root / "clip.mp4", captured_at="2024-01-01T10:00:00")
+    groups = assign_groups(
+        [
+            photo("a.jpg", "2024-01-01T10:00:00"),
+            video_item("clip.mp4", "2024-01-01T10:00:00"),
+        ],
+        suggestions(
+            trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")],
+        ),
+    )
+    from fotos_plus.viewer import render_html
+
+    return render_html(groups, str(root), token="t0ken", **kwargs)
+
+
+def test_a_video_card_shows_its_poster_with_duration(tmp_path: Path, monkeypatch) -> None:
+    import fotos_plus.viewer
+
+    monkeypatch.setattr(fotos_plus.viewer, "make_poster", lambda path: b"\xff\xd8poster")
+
+    document = _video_group_html(tmp_path)
+
+    assert "video-thumb" in document
+    assert "0:12" in document
+
+
+def test_a_video_without_decoder_gets_a_duration_tile(tmp_path: Path, monkeypatch) -> None:
+    import fotos_plus.viewer
+    from fotos_plus.photos import PhotoError
+
+    def boom(path):
+        raise PhotoError("no video decoder available")
+
+    monkeypatch.setattr(fotos_plus.viewer, "make_poster", boom)
+
+    document = _video_group_html(tmp_path)
+
+    assert "video-tile" in document
+    assert "Video 0:12" in document
+    # The tile is not a photo thumbnail: only the real photo renders a thumb img.
+    assert document.count('<img class="thumb"') == 1
+
+
+def test_a_video_card_is_distinguishable_from_a_photo_card(tmp_path: Path, monkeypatch) -> None:
+    import fotos_plus.viewer
+
+    monkeypatch.setattr(fotos_plus.viewer, "make_poster", lambda path: b"\xff\xd8poster")
+
+    document = _video_group_html(tmp_path)
+
+    assert 'class="thumb"' in document
+    assert 'class="video-thumb"' in document
+
+
+def test_the_browser_requests_the_poster_for_videos() -> None:
+    from fotos_plus.viewer import EDIT_SCRIPT
+
+    assert "/poster?ref=" in EDIT_SCRIPT
+    assert 'foto.kind === "video"' in EDIT_SCRIPT
+    assert "duration_s" in EDIT_SCRIPT
+
+
+def test_the_export_embeds_video_posters_and_no_blobs(tmp_path: Path, monkeypatch) -> None:
+    import fotos_plus.viewer
+
+    monkeypatch.setattr(fotos_plus.viewer, "make_poster", lambda path: b"\xff\xd8poster")
+
+    document = _video_group_html(tmp_path)
+
+    assert "video-thumb" in document
+    assert "<video" not in document

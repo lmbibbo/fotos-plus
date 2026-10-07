@@ -1032,6 +1032,8 @@ def test_the_photo_list_of_a_group_comes_back_in_order(tmp_path: Path, serving) 
             "sha256": "a",
             "marked": False,
             "captured_at": "2024-05-02T10:00:00",
+            "kind": "photo",
+            "duration_s": None,
         },
     ]
 
@@ -1073,6 +1075,137 @@ def test_the_photo_list_carries_the_content_hash_of_each_photo(
     _, data = fetch_photos(url, token, "2024-08-01T00:00:00")
 
     assert data["photos"][0]["sha256"] == "b"
+
+
+def build_video_index(tmp_path: Path):
+    """Index with one photo and one video in the same trip, both on disk."""
+    from tests.conftest import make_sized_image
+    from tests.test_video import make_video
+
+    root = tmp_path / "fotos"
+    make_sized_image(root / "a.jpg")
+    make_video(root / "clip.mp4", captured_at="2024-05-02T10:00:00")
+
+    photos = [
+        Photo(
+            relative_path="a.jpg",
+            name="a.jpg",
+            extension=".jpg",
+            size_bytes=1,
+            sha256="a",
+            captured_at="2024-05-02T10:00:00",
+            latitude=-41.13,
+            longitude=-71.31,
+        ),
+        Photo(
+            relative_path="clip.mp4",
+            name="clip.mp4",
+            extension=".mp4",
+            size_bytes=1,
+            sha256="c",
+            captured_at="2024-05-02T10:00:00",
+            latitude=-41.13,
+            longitude=-71.31,
+            kind="video",
+            duration_s=12.5,
+        ),
+    ]
+    index_path = tmp_path / "indice.json"
+    write_index(
+        ScanResult(root=str(root), scanned_at="2026-01-01T00:00:00", photos=photos),
+        index_path,
+    )
+    write_suggestions(
+        SuggestionsResult(
+            root=str(root),
+            scanned_at="2026-01-01T00:00:00",
+            trips=[trip("2024-05-01T00:00:00", "2024-05-05T00:00:00")],
+            periods=[],
+        ),
+        suggestions_path_next_to(index_path),
+    )
+    return index_path
+
+
+def fetch_poster(url: str, token: str, reference: str):
+    quoted = urllib.parse.quote(reference, safe="")
+    all_headers = {"X-Fotos-Plus-Token": token}
+    request = urllib.request.Request(f"{url}/poster?ref={quoted}", headers=all_headers)
+    try:
+        with urllib.request.urlopen(request, timeout=10) as respuesta:
+            return respuesta.status, respuesta.read(), dict(respuesta.headers)
+    except urllib.error.HTTPError as error:
+        return error.code, error.read(), dict(error.headers)
+
+
+def test_the_photo_list_carries_kind_and_duration(tmp_path: Path, serving) -> None:
+    index_path = build_video_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data = fetch_photos(url, token, "2024-05-01T00:00:00")
+
+    assert status == 200
+    by_ref = {photo["ref"]: photo for photo in data["photos"]}
+    assert by_ref["clip.mp4"]["kind"] == "video"
+    assert by_ref["clip.mp4"]["duration_s"] == 12.5
+    assert by_ref["a.jpg"]["kind"] == "photo"
+    assert by_ref["a.jpg"]["duration_s"] is None
+
+
+def test_the_render_endpoint_refuses_a_video(tmp_path: Path, serving) -> None:
+    index_path = build_video_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data, _ = fetch_render(url, token, "clip.mp4")
+
+    assert status == 422
+    assert "video" in json.loads(data.decode("utf-8"))["error"]
+
+
+def test_the_poster_endpoint_serves_a_video_poster(
+    tmp_path: Path, serving, monkeypatch
+) -> None:
+    import fotos_plus.server
+
+    monkeypatch.setattr(
+        fotos_plus.server, "cached_poster", lambda *args: b"\xff\xd8fake"
+    )
+    index_path = build_video_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data, headers = fetch_poster(url, token, "clip.mp4")
+
+    assert status == 200
+    assert data == b"\xff\xd8fake"
+    assert headers.get("Content-Type") == "image/jpeg"
+
+
+def test_the_poster_endpoint_refuses_a_photo(tmp_path: Path, serving) -> None:
+    index_path = build_video_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data, _ = fetch_poster(url, token, "a.jpg")
+
+    assert status == 400
+    assert "video" in json.loads(data.decode("utf-8"))["error"]
+
+
+def test_the_poster_endpoint_reports_when_no_decoder(
+    tmp_path: Path, serving, monkeypatch
+) -> None:
+    import fotos_plus.server
+    from fotos_plus.photos import PhotoError
+
+    def boom(*args):
+        raise PhotoError("no video decoder available")
+
+    monkeypatch.setattr(fotos_plus.server, "cached_poster", boom)
+    index_path = build_video_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, _, _ = fetch_poster(url, token, "clip.mp4")
+
+    assert status == 422
 
 
 def test_the_photo_list_reports_the_mark_state_of_each_photo(

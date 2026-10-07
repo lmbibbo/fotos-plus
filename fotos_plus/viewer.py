@@ -15,7 +15,8 @@ from .index import (
 )
 from .labels import read_edicion, resolve_labels
 from .models import Photo, SuggestionsResult
-from .photos import PhotoError, make_thumbnail
+from .photos import PhotoError, make_poster, make_thumbnail
+from .video import format_duration_s
 
 if TYPE_CHECKING:
     from .labels import LabelResolution
@@ -291,10 +292,39 @@ def assign_groups(
 def _thumbnail_b64(photo: Photo, root: Path) -> Optional[str]:
     path = Path(root) / Path(photo.relative_path)
     try:
-        data = make_thumbnail(path)
+        data = make_poster(path) if photo.kind == "video" else make_thumbnail(path)
     except PhotoError:
         return None
     return base64.b64encode(data).decode("ascii")
+
+
+def _video_tile(photo: Photo) -> str:
+    """Generic tile for a video without a poster, marked with its duration."""
+    mark = format_duration_s(photo.duration_s)
+    label = f"Video {mark}".strip() if mark else "Video"
+    return (
+        f'<span class="video-tile" title="{html.escape(photo.name)}">'
+        f"{html.escape(label)}</span>"
+    )
+
+
+def _thumb_html(photo: Photo, root: Path) -> str:
+    """Thumbnail fragment for a card: image, video poster, or duration tile."""
+    encoded = _thumbnail_b64(photo, root)
+    if encoded is None:
+        # An unreadable photo simply leaves no thumbnail, as before; a video
+        # without a decoder still gets its generic duration tile.
+        return _video_tile(photo) if photo.kind == "video" else ""
+    if photo.kind == "video":
+        mark = format_duration_s(photo.duration_s)
+        badge = (
+            f'<span class="video-duration">{html.escape(mark)}</span>' if mark else ""
+        )
+        return (
+            f'<span class="video-thumb">'
+            f"{_photo_card(encoded, photo.name)}{badge}</span>"
+        )
+    return _photo_card(encoded, photo.name)
 
 
 def _group_thumbs(group: Group, root: Path) -> list[str]:
@@ -302,9 +332,9 @@ def _group_thumbs(group: Group, root: Path) -> list[str]:
     for photo in group.photos:
         if len(thumbs) >= THUMBNAILS_PER_GROUP:
             break
-        encoded = _thumbnail_b64(photo, root)
-        if encoded is not None:
-            thumbs.append(encoded)
+        fragment = _thumb_html(photo, root)
+        if fragment:
+            thumbs.append(fragment)
     return thumbs
 
 
@@ -426,9 +456,7 @@ def _group_card(
     if group.country:
         meta.append(group.country)
 
-    thumbs = "".join(
-        _photo_card(b64, group.title) for b64 in _group_thumbs(group, root)
-    )
+    thumbs = "".join(_group_thumbs(group, root))
     if not thumbs:
         # Grupo declarado que se quedo sin fotos, normalmente porque cae dentro de
         # un viaje. Se avisa para que no parezca que falta el grupo.
@@ -562,13 +590,13 @@ def _section_html(
 
 
 def _flat_card(photo: Photo, root: Path) -> str:
-    encoded = _thumbnail_b64(photo, root)
-    if encoded is None:
+    fragment = _thumb_html(photo, root)
+    if not fragment:
         return ""
     stamp = (photo.captured_at or "")[:10]
     return (
         '<article class="card flat">'
-        f"{_photo_card(encoded, photo.name)}"
+        f"{fragment}"
         f'<p class="meta">{html.escape(stamp)}</p>'
         "</article>"
     )
@@ -593,6 +621,12 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .card.flat .thumb { width: 100%; height: auto; display: block; }
 .thumb { width: 100%; height: auto; display: block; border-radius: 4px;
          background: #2c3036; }
+.video-thumb { position: relative; display: block; }
+.video-duration { position: absolute; right: 4px; bottom: 4px; background: #000;
+         color: #fff; font-size: 11px; padding: 1px 5px; border-radius: 4px; }
+.video-tile { display: flex; align-items: center; justify-content: center;
+         min-height: 60px; background: #2c3036; border-radius: 4px;
+         color: #9aa0a6; font-size: 12px; }
 .label-form { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; }
 .label-input { flex: 1 1 140px; min-width: 0; font: inherit; font-size: 12px;
                padding: 5px 8px; border-radius: 6px; border: 1px solid #3c4149;
@@ -1076,15 +1110,25 @@ EDIT_SCRIPT = """
       // It is sliced to the date only; the served value keeps the full timestamp.
       // An undated photo leaves the line exactly as it was, with no placeholder.
       var fecha = foto.captured_at ? foto.captured_at.slice(0, 10) : "";
+      // Videos show a still without playback in this phase: the poster endpoint
+      // serves the fixed frame, and the duration rides next to the position.
+      var esVideo = foto.kind === "video";
+      var duracion = "";
+      if (esVideo && typeof foto.duration_s === "number" && foto.duration_s >= 0) {
+        var totalSeg = Math.floor(foto.duration_s);
+        duracion = Math.floor(totalSeg / 60) + ":" + ("0" + (totalSeg % 60)).slice(-2);
+      }
       posicion.textContent = (indice + 1) + " de " + lista.length
-        + (fecha ? " \\u00b7 " + fecha : "");
+        + (fecha ? " \\u00b7 " + fecha : "")
+        + (duracion ? " \\u00b7 " + duracion : "");
       pintarMarca(foto);
       // Al cambiar de foto el selector se repinta con los cubos de esa foto, no los de
       // la anterior.
       pintarCubos(foto);
       estado.textContent = "";
       soltarImagen();
-      fetch("/render?ref=" + encodeURIComponent(foto.ref), {
+      var rutaFijo = esVideo ? "/poster?ref=" : "/render?ref=";
+      fetch(rutaFijo + encodeURIComponent(foto.ref), {
         headers: { "X-Fotos-Plus-Token": token }
       }).then(function (respuesta) {
         if (!respuesta.ok) { throw new Error("No se pudo preparar la foto"); }

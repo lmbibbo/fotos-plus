@@ -15,6 +15,7 @@ from .index import (
     write_suggestions,
 )
 from .photos import EXTENSION_ONLY_EXTENSIONS, FULLY_READABLE_EXTENSIONS
+from .video import VIDEO_EXTENSIONS
 from .places import countries_version, country_of
 from .progress import ProgressReporter, progress_enabled
 from .scanner import ScanRootError, scan
@@ -28,9 +29,11 @@ EXIT_PATH_ERROR = 2
 def _formats_help() -> str:
     complete = ", ".join(sorted(FULLY_READABLE_EXTENSIONS))
     partial = ", ".join(sorted(EXTENSION_ONLY_EXTENSIONS))
+    videos = ", ".join(sorted(VIDEO_EXTENSIONS))
     return (
         f"formatos leidos por completo: {complete}\n"
-        f"formatos aceptados por extension (metadatos parciales): {partial}"
+        f"formatos aceptados por extension (metadatos parciales): {partial}\n"
+        f"videos aceptados por extension (fecha y duracion del contenedor): {videos}"
     )
 
 

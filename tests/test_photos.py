@@ -44,8 +44,16 @@ def test_heic_is_supported(tmp_path: Path) -> None:
 
 
 def test_supported_extensions_are_disjoint_and_complete() -> None:
+    from fotos_plus.video import VIDEO_EXTENSIONS
+
     assert not FULLY_READABLE_EXTENSIONS & EXTENSION_ONLY_EXTENSIONS
-    assert SUPPORTED_EXTENSIONS == FULLY_READABLE_EXTENSIONS | EXTENSION_ONLY_EXTENSIONS
+    assert not VIDEO_EXTENSIONS & (
+        FULLY_READABLE_EXTENSIONS | EXTENSION_ONLY_EXTENSIONS
+    )
+    assert (
+        SUPPORTED_EXTENSIONS
+        == FULLY_READABLE_EXTENSIONS | EXTENSION_ONLY_EXTENSIONS | VIDEO_EXTENSIONS
+    )
 
 
 def test_same_content_gives_same_hash(tmp_path: Path) -> None:

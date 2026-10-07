@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from .index import (
     edicion_path_next_to,
+    poster_path_for,
     render_path_for,
     renders_dir_next_to,
     suggestions_path_next_to,
@@ -34,7 +35,7 @@ from .labels import (
     write_edicion,
 )
 from .index import read_index, read_suggestions
-from .photos import PhotoError, cached_render
+from .photos import PhotoError, cached_poster, cached_render
 from .viewer import _photo_sort_key, assign_groups, render_html
 
 
@@ -132,6 +133,9 @@ class _LabelHandler(http.server.BaseHTTPRequestHandler):
         if path == "/render":
             self._serve_render(parse_qs(split.query))
             return
+        if path == "/poster":
+            self._serve_poster(parse_qs(split.query))
+            return
         if path == "/api/photos":
             self._serve_photos(parse_qs(split.query))
             return
@@ -165,6 +169,10 @@ class _LabelHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(404, {"error": "la referencia no corresponde a ninguna foto"})
             return
 
+        if photo.kind == "video":
+            self._send_json(422, {"error": "los videos no tienen render: esta fase no reproduce video"})
+            return
+
         source = server.root / photo.relative_path
         try:
             data = cached_render(source, photo.sha256, server.render_path(photo.sha256))
@@ -173,6 +181,47 @@ class _LabelHandler(http.server.BaseHTTPRequestHandler):
             return
         except OSError as error:
             self._send_json(500, {"error": f"no se pudo leer la foto: {error}"})
+            return
+        self._send_image(200, data)
+
+    def _serve_poster(self, query: dict[str, list[str]]) -> None:
+        """Sirve el fotograma fijo de un video del indice, para el recorrido.
+
+        Comparte las garantias del render: token, mismo origen y resolucion por
+        indice. En esta fase el recorrido muestra el fijo sin reproducir nada.
+        """
+        server = self.server
+
+        if self.headers.get("X-Fotos-Plus-Token") != server.token:
+            self._send_json(403, {"error": "token invalido"})
+            return
+
+        if _is_cross_origin(self.headers):
+            self._send_json(403, {"error": "peticion de otro origen rechazada"})
+            return
+
+        values = query.get("ref") or []
+        if len(values) != 1:
+            self._send_json(400, {"error": "falta la referencia del video"})
+            return
+
+        photo = server.photo_for(values[0])
+        if photo is None:
+            self._send_json(404, {"error": "la referencia no corresponde a ningun video"})
+            return
+
+        if photo.kind != "video":
+            self._send_json(400, {"error": "la referencia no es un video"})
+            return
+
+        source = server.root / photo.relative_path
+        try:
+            data = cached_poster(source, photo.sha256, server.poster_path(photo.sha256))
+        except PhotoError as error:
+            self._send_json(422, {"error": f"no se pudo preparar el fijo: {error}"})
+            return
+        except OSError as error:
+            self._send_json(500, {"error": f"no se pudo leer el video: {error}"})
             return
         self._send_image(200, data)
 
@@ -211,6 +260,8 @@ class _LabelHandler(http.server.BaseHTTPRequestHandler):
                         "sha256": photo.sha256,
                         "marked": photo.sha256 in marked,
                         "captured_at": photo.captured_at,
+                        "kind": photo.kind,
+                        "duration_s": photo.duration_s,
                     }
                     for photo in sorted(group.photos, key=_photo_sort_key)
                 ],
@@ -476,6 +527,9 @@ class _LabelServer(http.server.HTTPServer):
 
     def render_path(self, sha256: str) -> Path:
         return render_path_for(renders_dir_next_to(self.index_path), sha256)
+
+    def poster_path(self, sha256: str) -> Path:
+        return poster_path_for(renders_dir_next_to(self.index_path), sha256)
 
     def resolve(self):
         """Las etiquetas vigentes y los grupos, calculados una sola vez por sesion.

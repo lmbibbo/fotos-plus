@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 SUGGESTIONS_VERSION = 2
 
 SOURCE_DATETIME_ORIGINAL = "exif-datetime-original"
 SOURCE_DATETIME = "exif-datetime"
+SOURCE_CONTAINER_CREATION = "container-creation-time"
 
 STATUS_SUGGESTED = "sugerido"
 LOCATION_KNOWN = "known"
@@ -38,6 +39,8 @@ class Photo:
     duplicate_of: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    kind: str = "photo"
+    duration_s: Optional[float] = None
 
     def to_dict(self) -> dict:
         return {
@@ -51,6 +54,8 @@ class Photo:
             "duplicate_of": self.duplicate_of,
             "latitude": self.latitude,
             "longitude": self.longitude,
+            "kind": self.kind,
+            "duration_s": self.duration_s,
         }
 
     @classmethod
@@ -66,6 +71,8 @@ class Photo:
             duplicate_of=data.get("duplicate_of"),
             latitude=data.get("latitude"),
             longitude=data.get("longitude"),
+            kind=data.get("kind", "photo"),
+            duration_s=data.get("duration_s"),
         )
 
     @property
