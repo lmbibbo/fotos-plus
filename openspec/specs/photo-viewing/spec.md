@@ -520,13 +520,11 @@ control that depends on the server.
 When at least one photo belongs to a bucket, the landing page MUST present a section for each
 bucket that holds at least one photo, listing the photos that belong to it. Each such section MUST
 show the bucket name and how many photos it holds, and MUST order its photos by the same order the
-photos are browsed in. A bucket in the catalogue that holds no photo MUST NOT produce a section. The
-photos that belong to no bucket MUST be presented in a section of their own, placed after every
-bucket section.
+photos are browsed in. A bucket in the catalogue that holds no photo MUST NOT produce a section.
+Photos that belong to no bucket MUST NOT appear in any photo section on the landing page.
 
 Bucket sections MUST come after the group sections, in the order the bucket catalogue lists them.
-When no photo belongs to any bucket, the landing page MUST NOT present any bucket section and MUST
-NOT present the untagged photos section.
+The landing page MUST NOT present an untagged photos section in any case.
 
 #### Scenario: One section per bucket
 
@@ -546,8 +544,8 @@ NOT present the untagged photos section.
 
 - **GIVEN** an edition file that places one photo in "Favoritas" and leaves every other photo in no bucket
 - **WHEN** the landing page is generated
-- **THEN** the photos in no bucket appear in a section of their own
-- **AND** that section appears after the "Favoritas" section
+- **THEN** the "Favoritas" section appears
+- **AND** no section of their own appears for the photos in no bucket: no untagged photos section exists
 
 #### Scenario: An empty bucket produces no section
 
@@ -574,13 +572,11 @@ NOT present the untagged photos section.
 A photo section MUST NOT embed more than 300 photos, and its heading MUST report how many photos the
 section actually holds. When photos are held back, the section MUST say so and point at the photo
 browser, which lists every photo of the group without embedding them. The bound applies to every photo
-section, including the marked section and the untagged photos section, and the exported HTML inherits
+section, including the marked section and the bucket sections, and the exported HTML inherits
 it.
 
-Bounding the section is what keeps the document from growing with the library. The untagged photos
-section is the one that needs it: it holds every photo in no bucket, so it holds the whole library
-unless most photos are in buckets. Marking a single photo in a library of 2000 must not turn a page
-of 130 KB into one the browser cannot open.
+Bounding the section is what keeps the document from growing with the library: a bucket holding
+hundreds of photos must not turn the page into one the browser cannot open.
 
 #### Scenario: A section within the bound draws every photo
 
@@ -601,7 +597,8 @@ of 130 KB into one the browser cannot open.
 
 - **GIVEN** a library of 2000 photos and an edition file that marks exactly one of them
 - **WHEN** the landing page is generated
-- **THEN** the untagged photos section holds at most 300 drawn photos
+- **THEN** the marked section appears with that photo
+- **AND** no untagged photos section appears
 
 ### Requirement: Both axes coexist on one page
 
@@ -682,15 +679,17 @@ drop target for group cards. This MUST NOT change what dragging a card onto a gr
 
 ### Requirement: The exported HTML shows the photo sections read-only
 
-The exported HTML MUST present the bucket sections and the untagged photos section, and MUST NOT
-offer any control that changes a bucket assignment or creates a bucket name. The exported document
-MUST contain no bucket picker and no drop target, exactly as it contains no tag editor.
+The exported HTML MUST present the bucket sections, and MUST NOT present an untagged photos
+section. It MUST NOT offer any control that changes a bucket assignment or creates a bucket name.
+The exported document MUST contain no bucket picker and no drop target, exactly as it contains
+no tag editor.
 
 #### Scenario: Sections in the export
 
 - **GIVEN** an edition file that places two photos in "Favoritas"
 - **WHEN** the exported HTML is generated with `view` and no `--serve`
 - **THEN** a "Favoritas" section listing the two photos appears in the export
+- **AND** no untagged photos section appears
 
 #### Scenario: The export has no bucket controls
 

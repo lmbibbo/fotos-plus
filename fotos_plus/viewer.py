@@ -30,9 +30,9 @@ THUMBNAILS_PER_GROUP = 5
 # pagina crece con la cantidad de fotos del cubo. Con el tope, una seccion no puede pasar
 # de ~4 MB y la pagina sigue abriendo; el encabezado dice cuantas hay en total.
 #
-# El caso que motiva el tope es "Sin cubo", que por definicion contiene casi toda la
-# biblioteca: sin el, marcar una sola foto pasaba la pagina de 130 KB a 42 MB con 2000
-# fotos, y el navegador se colgaba antes de mostrar nada.
+# El caso que motiva el tope es un cubo con casi toda la biblioteca: sin el, una
+# seccion con 2000 fotos pasaba la pagina de 130 KB a 42 MB y el navegador se
+# colgaba antes de mostrar nada.
 PHOTOS_PER_SECTION = 300
 
 ORPHAN_TITLE = "Fotos sin clasificar"
@@ -79,7 +79,6 @@ class Group:
 
 UNTAGGED_SECTION_TITLE = "Sin tag"
 MARKED_SECTION_TITLE = "Marcadas"
-UNTAGGED_PHOTOS_TITLE = "Sin cubo"
 TAG_CATALOG_ID = "tag-catalog"
 BUCKET_CATALOG_ID = "bucket-catalog"
 UNCLASSIFIED_GROUP_KEY = "sin-clasificar"
@@ -1211,9 +1210,9 @@ def photo_sections(
     """Las secciones de fotos sueltas: las marcadas y las de cada cubo.
 
     El orden es fijo y no depende de las fechas, porque estos nombres los escribio la
-    persona y no losymlcoloco una agrupacion automatica: primero las marcadas, despues los
-    cubos en el orden en que estan guardados, y al final las fotos que no estan en ningun
-    cubo.
+    persona y no los coloco una agrupacion automatica: primero las marcadas, despues los
+    cubos en el orden en que estan guardados. Las fotos que no estan en ningun cubo no
+    aparecen en ninguna seccion de fotos.
 
     Un nombre del catalogo que no tiene ninguna foto no produce seccion: la vacia no le
     aporta nada a quien esta mirando. Una foto que esta en varios cubos aparece en cada
@@ -1253,22 +1252,6 @@ def photo_sections(
                     photos=sorted(en_este, key=_photo_sort_key),
                 )
             )
-
-    # Lo que no esta en ningun cubo. Se omiten las fotos del catalogo que no existen, que
-    # ya se filtraron arriba.
-    sin_cubos = [
-        presentes[sha256]
-        for sha256 in presentes
-        if sha256 not in buckets or not buckets[sha256]
-    ]
-    if sin_cubos:
-        sections.append(
-            Section(
-                tag=None,
-                title=UNTAGGED_PHOTOS_TITLE,
-                photos=sorted(sin_cubos, key=_photo_sort_key),
-            )
-        )
 
     return sections
 

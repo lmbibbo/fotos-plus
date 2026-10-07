@@ -31,7 +31,8 @@ El orden de la página es siempre el mismo:
 1. Las secciones de los tags, por fecha de su primera tarjeta.
 2. La sección `Marcadas`.
 3. Una sección por cada cubo que tenga fotos, en el orden del catálogo.
-4. La sección `Sin cubo`, con las fotos que no están en ninguno.
+
+Las fotos que no están en ningún cubo no aparecen en ninguna sección de fotos.
 
 Las secciones de fotos usan miniaturas, no renders: es lo que permite que la página abra
 rápido con una biblioteca grande.
@@ -572,9 +573,7 @@ Cualquier otro archivo se ignora en silencio.
   HTML, así que el tamaño está fijo en esta etapa.
 - **Las secciones de fotos dibujan como mucho 300 fotos**: cada sección dibuja hasta 300 y el
   encabezado dice cuántas tiene en total. Lo que queda afuera no se dibuja, y un aviso te dice cuántas
-  son y que las veas desde `Ver fotos` del grupo, que las lista todas sin agrandar el HTML. El límite
-  pesa sobre todo en `Sin cubo`, que por definición contiene casi toda la biblioteca: sin él, marcar una
-  sola foto pasaba la página de 130 KB a 42 MB con 2000 fotos. Para llegar a la foto 301 y siguientes
+  son y que las veas desde `Ver fotos` del grupo, que las lista todas sin agrandar el HTML. Para llegar a la foto 301 y siguientes
   de un cubo grande hay que usar el recorrido.
 - **El visualizador se regenera entero en cada `view`**: no hay caché, así que abrirlo varias
   veces sobre el mismo índice vuelve a generar todas las miniaturas.
