@@ -43,6 +43,7 @@ def test_non_photo_files_are_ignored(tmp_path: Path) -> None:
     result = scan(tmp_path)
 
     assert [photo.name for photo in result.photos] == ["foto.jpg"]
+    assert [error.relative_path for error in result.errors] == ["video.mp4"]
 
 
 def test_empty_folder_gives_empty_inventory(tmp_path: Path) -> None:
@@ -177,7 +178,8 @@ def test_progress_total_excludes_non_photos(tmp_path: Path) -> None:
 
     scan(tmp_path, progress=lambda done, total: seen.append((done, total)))
 
-    assert {total for _, total in seen} == {1}
+    # pdf and txt are not candidates; the broken videos are (and land as errors).
+    assert {total for _, total in seen} == {3}
 
 
 def test_progress_callback_failure_does_not_abort_the_scan(tmp_path: Path) -> None:

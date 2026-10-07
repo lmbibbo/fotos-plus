@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from fotos_plus.index import (
+    IndexVersionError,
     default_index_path,
     index_path_for,
     read_index,
@@ -90,7 +91,7 @@ def test_index_has_version_root_scanned_at_photos_and_errors(
     path = scanned_index(make_result(tmp_path), tmp_path / "indice.json")
     data = json.loads(path.read_text(encoding="utf-8"))
 
-    assert data["version"] == 1
+    assert data["version"] == 2
     assert data["root"] == str(tmp_path)
     assert data["scanned_at"] == "2026-09-28T14:03:11"
     assert len(data["photos"]) == 2
@@ -377,4 +378,74 @@ def test_suggestions_counts_the_photos_that_need_auditing(tmp_path: Path) -> Non
     result = make_suggestions(tmp_path)
 
     assert result.trips_to_audit_count == 12
+
+
+def test_photo_defaults_to_photo_kind_without_duration() -> None:
+    photo = Photo(
+        relative_path="a.jpg",
+        name="a.jpg",
+        extension=".jpg",
+        size_bytes=100,
+        sha256="a" * 64,
+    )
+
+    assert photo.kind == "photo"
+    assert photo.duration_s is None
+    assert photo.to_dict()["kind"] == "photo"
+    assert photo.to_dict()["duration_s"] is None
+
+
+def test_photo_without_kind_reads_as_photo() -> None:
+    data = {
+        "relative_path": "a.jpg",
+        "name": "a.jpg",
+        "extension": ".jpg",
+        "size_bytes": 100,
+        "sha256": "a" * 64,
+    }
+
+    photo = Photo.from_dict(data)
+
+    assert photo.kind == "photo"
+    assert photo.duration_s is None
+
+
+def test_video_photo_round_trip_keeps_kind_and_duration(
+    tmp_path: Path, scanned_index
+) -> None:
+    result = make_result(tmp_path)
+    result.photos.append(
+        Photo(
+            relative_path="clip.mp4",
+            name="clip.mp4",
+            extension=".mp4",
+            size_bytes=2048,
+            sha256="b" * 64,
+            captured_at="2024-07-15T18:22:04",
+            kind="video",
+            duration_s=12.5,
+        )
+    )
+    path = scanned_index(result, tmp_path / "indice.json")
+
+    loaded = read_index(path)
+    video = [photo for photo in loaded.photos if photo.name == "clip.mp4"][0]
+
+    assert video.kind == "video"
+    assert video.duration_s == 12.5
+
+
+def test_read_index_rejects_version_1_and_asks_for_rescan(tmp_path: Path) -> None:
+    path = tmp_path / "indice.json"
+    data = {
+        "version": 1,
+        "root": str(tmp_path),
+        "scanned_at": "2026-09-28T14:03:11",
+        "photos": [],
+        "errors": [],
+    }
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(IndexVersionError, match="rescan"):
+        read_index(path)
 

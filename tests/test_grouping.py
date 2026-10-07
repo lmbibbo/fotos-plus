@@ -59,6 +59,38 @@ def unlocated(name: str, day: str) -> Photo:
     return photo(f"{name}.jpg", f"{day}T10:00:00")
 
 
+def video(
+    name: str,
+    day: str | None,
+    latitude: float | None = None,
+    longitude: float | None = None,
+) -> Photo:
+    item = photo(
+        f"{name}.mp4",
+        f"{day}T10:00:00" if day is not None else None,
+        latitude,
+        longitude,
+    )
+    item.extension = ".mp4"
+    item.kind = "video"
+    item.duration_s = 12.5
+    return item
+
+
+def located_video(
+    name: str, day: str, position: tuple[float, float]
+) -> Photo:
+    return video(name, day, position[0], position[1])
+
+
+def unlocated_video(name: str, day: str) -> Photo:
+    return video(name, day)
+
+
+def undated_video(name: str) -> Photo:
+    return video(name, None, *BUENOS_AIRES)
+
+
 def test_haversine_known_distance_within_one_percent() -> None:
     distance = haversine_km(BUENOS_AIRES, MEDELLIN)
     assert distance == pytest.approx(4888.0, rel=0.01)
@@ -277,6 +309,37 @@ def test_build_suggestions_does_not_modify_photos() -> None:
     before = [photo.to_dict() for photo in photos]
     build_suggestions(photos, "/fotos", "2024-02-01T00:00:00")
     assert [photo.to_dict() for photo in photos] == before
+
+
+def test_dated_video_joins_the_same_trip_as_same_place_photos() -> None:
+    photos = [
+        located("a", "2024-01-01", BUENOS_AIRES),
+        located_video("clip", "2024-01-05", BUENOS_AIRES),
+        located("b", "2024-01-09", BUENOS_AIRES),
+    ]
+    result = build_suggestions(photos, "/fotos", "2024-02-01T00:00:00")
+    assert len(result.trips) == 1
+    assert result.trips[0].photo_count == 3
+
+
+def test_dated_video_without_position_joins_a_period() -> None:
+    photos = [
+        unlocated("a", "2024-01-01"),
+        unlocated_video("clip", "2024-01-02"),
+    ]
+    result = build_suggestions(photos, "/fotos", "2024-02-01T00:00:00")
+    assert len(result.trips) == 0
+    assert sum(period.photo_count for period in result.periods) == 2
+
+
+def test_undated_video_is_counted_and_never_grouped() -> None:
+    photos = [
+        located("a", "2024-01-01", BUENOS_AIRES),
+        undated_video("clip"),
+    ]
+    result = build_suggestions(photos, "/fotos", "2024-02-01T00:00:00")
+    assert result.undated_photo_count == 1
+    assert result.trips[0].photo_count == 1
 
 
 def constant_country(name: str):

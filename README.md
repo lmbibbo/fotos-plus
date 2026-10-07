@@ -546,6 +546,9 @@ Leídos por completo (imagen y EXIF): `.bmp`, `.gif`, `.jpeg`, `.jpg`, `.png`, `
 Aceptados por extensión, con metadatos parciales: `.arw`, `.cr2`, `.dng`, `.heic`,
 `.heif`, `.nef`.
 
+Videos aceptados por extensión, con fecha y duración del contenedor: `.3gp`, `.mov`,
+`.mp4`. La posición GPS del video se lee cuando el contenedor la declara.
+
 Cualquier otro archivo se ignora en silencio.
 
 ## Limitaciones conocidas
@@ -564,7 +567,10 @@ Cualquier otro archivo se ignora en silencio.
 - **El umbral de 200 km no se puede ajustar sin reescanear**: está fijo en esta versión.
 - **EXIF no guarda zona horaria**: `captured_at` se guarda tal cual, sin ajuste.
 - **Un archivo con extensión de foto pero ilegible** no se registra como foto: aparece en
-  `errors` y el escaneo sigue con el resto.
+  `errors` y el escaneo sigue con el resto. Lo mismo vale para un video ilegible.
+- **Los videos no se reproducen en esta fase**: las tarjetas muestran un fotograma cuando
+  hay un `ffmpeg` en el sistema y una ficha con la duración cuando no lo hay; el recorrido
+  muestra el fotograma fijo sin reproducir.
 - **Un directorio sin permiso de lectura** no corta el escaneo: se anota en `errors` y se
   continúa con los demás directorios.
 - El escaneo no es incremental: cada corrida vuelve a hashear todos los archivos.

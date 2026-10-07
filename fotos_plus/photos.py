@@ -9,12 +9,15 @@ from typing import Optional
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .models import SOURCE_DATETIME, SOURCE_DATETIME_ORIGINAL, Photo
+from .video import VIDEO_EXTENSIONS, identify_video
 
 FULLY_READABLE_EXTENSIONS = frozenset(
     {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif"}
 )
 EXTENSION_ONLY_EXTENSIONS = frozenset({".heic", ".heif", ".dng", ".nef", ".cr2", ".arw"})
-SUPPORTED_EXTENSIONS = FULLY_READABLE_EXTENSIONS | EXTENSION_ONLY_EXTENSIONS
+SUPPORTED_EXTENSIONS = (
+    FULLY_READABLE_EXTENSIONS | EXTENSION_ONLY_EXTENSIONS | VIDEO_EXTENSIONS
+)
 
 HASH_CHUNK_SIZE = 1024 * 1024
 
@@ -169,6 +172,9 @@ def identify(path: Path, relative_path: str) -> Photo:
     except OSError as error:
         raise PhotoError(f"cannot read file: {error}") from error
 
+    if path.suffix.lower() in VIDEO_EXTENSIONS:
+        return identify_video(path, relative_path, size_bytes, sha256)
+
     captured_at, source, position = _read_metadata(path)
     latitude, longitude = position if position is not None else (None, None)
     return Photo(
@@ -224,6 +230,52 @@ def make_render(path: Path) -> bytes:
         raise PhotoError(f"cannot read image: {error}") from error
 
 
+def make_poster(path: Path) -> bytes:
+    """Extracts a JPEG poster frame from a video with the system ffmpeg.
+
+    The frame is scaled like a thumbnail so posters travel through the same
+    embedded pipeline. Raises PhotoError when no decoder exists or extraction
+    fails, so callers fall back to the generic duration tile.
+    """
+    from .video import ffmpeg_available
+
+    if not ffmpeg_available():
+        raise PhotoError("no video decoder available")
+    import subprocess
+
+    try:
+        completed = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-ss",
+                "1",
+                "-i",
+                str(path),
+                "-vframes",
+                "1",
+                "-vf",
+                f"scale={THUMBNAIL_SIZE}:{THUMBNAIL_SIZE}:force_original_aspect_ratio=decrease",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "mjpeg",
+                "-q:v",
+                "5",
+                "pipe:1",
+            ],
+            capture_output=True,
+            timeout=60,
+        )
+    except (OSError, ValueError) as error:
+        raise PhotoError(f"cannot run decoder: {error}") from error
+    if completed.returncode != 0 or not completed.stdout:
+        raise PhotoError("cannot extract video frame")
+    return completed.stdout
+
+
 def cached_render(photo_path: Path, sha256: str, render_path: Path) -> bytes:
     """Returns the photo's screen render, producing it only if it is not stored yet.
 
@@ -242,5 +294,23 @@ def cached_render(photo_path: Path, sha256: str, render_path: Path) -> bytes:
     except OSError:
         # The cache is an optimisation. If it cannot be written, hand back the render just
         # produced instead of failing: the only thing lost is the reuse.
+        return data
+    return data
+
+
+def cached_poster(video_path: Path, sha256: str, poster_path: Path) -> bytes:
+    """Returns the video's poster frame, producing it only if it is not stored yet.
+
+    Like renders, posters are identified by content hash and disposable. Raises
+    PhotoError when no decoder exists or extraction fails.
+    """
+    poster_path = Path(poster_path)
+    if poster_path.is_file():
+        return poster_path.read_bytes()
+    data = make_poster(video_path)
+    try:
+        poster_path.parent.mkdir(parents=True, exist_ok=True)
+        poster_path.write_bytes(data)
+    except OSError:
         return data
     return data

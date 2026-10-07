@@ -8,11 +8,15 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from .models import ScanResult, SuggestionsResult
+from .models import INDEX_VERSION, ScanResult, SuggestionsResult
 
 SUGGESTIONS_SUFFIX = "-sugerencias"
 EDITION_SUFFIX = "-edicion"
 RENDERS_SUFFIX = "-renders"
+
+
+class IndexVersionError(ValueError):
+    pass
 
 
 def state_dir() -> Path:
@@ -86,6 +90,11 @@ def render_path_for(renders_dir: Path, sha256: str) -> Path:
     return Path(renders_dir) / f"{sha256}.jpg"
 
 
+def poster_path_for(renders_dir: Path, sha256: str) -> Path:
+    """Path of the cached poster frame for the video with that content hash."""
+    return Path(renders_dir) / f"{sha256}-poster.jpg"
+
+
 def default_index_path(root: Path) -> Path:
     return index_path_for(root)
 
@@ -127,6 +136,12 @@ def write_suggestions(result: SuggestionsResult, path: Path) -> Path:
 
 def read_index(path: Path) -> ScanResult:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
+    version = data.get("version")
+    if version != INDEX_VERSION:
+        raise IndexVersionError(
+            f"index version {version!r} is not supported "
+            f"(expected {INDEX_VERSION}): rescan the library to rebuild the index"
+        )
     return ScanResult.from_dict(data)
 
 
