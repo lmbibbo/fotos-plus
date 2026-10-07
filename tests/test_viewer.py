@@ -1554,8 +1554,8 @@ def test_a_group_section_keeps_counting_groups() -> None:
     assert seccion.count == 1
 
 
-def test_the_photo_sections_come_out_marked_then_buckets_then_untagged() -> None:
-    from fotos_plus.viewer import MARKED_SECTION_TITLE, UNTAGGED_PHOTOS_TITLE, photo_sections
+def test_the_photo_sections_come_out_marked_then_buckets() -> None:
+    from fotos_plus.viewer import MARKED_SECTION_TITLE, photo_sections
 
     a = photo("a.jpg", "2024-01-01T10:00:00")
     b = photo("b.jpg", "2024-06-01T10:00:00")
@@ -1572,7 +1572,6 @@ def test_the_photo_sections_come_out_marked_then_buckets_then_untagged() -> None
         MARKED_SECTION_TITLE,
         "Favoritas",
         "Para imprimir",
-        UNTAGGED_PHOTOS_TITLE,
     ]
 
 
@@ -1624,7 +1623,7 @@ def test_a_marked_photo_is_only_in_the_marked_section_when_it_holds_no_bucket() 
 
     a = photo("a.jpg", "2024-01-01T10:00:00")
 
-    sections = photo_sections([a], marked=["a"])
+    sections = photo_sections([a], marked=[a.sha256])
 
     assert len(sections) == 1
     assert sections[0].photos == [a]
@@ -1655,15 +1654,14 @@ def test_an_undated_photo_is_still_listed_and_follows_browse_order() -> None:
     )
 
 
-def test_an_undated_photo_appears_in_the_untagged_section_too() -> None:
+def test_an_undated_photo_gets_no_section_when_no_bucket_membership_exists() -> None:
     from fotos_plus.viewer import photo_sections
 
     sin_fecha = photo("b.jpg", None)
 
     sections = photo_sections([sin_fecha], photo_tags=["Favoritas"])
 
-    assert sections[0].title == "Sin cubo"
-    assert sections[0].photos == [sin_fecha]
+    assert sections == []
 
 
 def test_photos_within_a_section_follow_browse_order() -> None:
@@ -1758,7 +1756,7 @@ def test_a_section_of_one_photo_says_photo_and_not_photos(tmp_path: Path) -> Non
 # --- 6.7 el orden de la pagina -------------------------------------------------
 
 
-def test_the_page_goes_groups_then_marked_then_buckets_then_untagged(
+def test_the_page_goes_groups_then_marked_then_buckets(
     tmp_path: Path,
 ) -> None:
     document = _sections_html(
@@ -1772,11 +1770,11 @@ def test_the_page_goes_groups_then_marked_then_buckets_then_untagged(
     grid = document.index('<div class="grid">')
     fotos = document.index('<section class="photo-section">')
     assert grid < fotos
-    # Y entre las secciones de fotos: marcadas, despues cubos, al final sin cubo.
+    # Y entre las secciones de fotos: marcadas, despues cubos. Sin cubo no existe.
     marcadas = document.index(">Marcadas<span")
     favoritas = document.index(">Favoritas<span")
-    sin_cubo = document.index(">Sin cubo<span")
-    assert marcadas < favoritas < sin_cubo
+    assert marcadas < favoritas
+    assert "Sin cubo" not in document
 
 
 def test_a_library_with_nothing_to_regroup_keeps_the_single_flat_grid(
@@ -1841,18 +1839,22 @@ def test_a_bucketed_photo_disappears_from_the_section_when_unbucketed(
     def seccion_favoritas(document: str) -> str:
         return document.split(">Favoritas<span", 1)[1].split("</section>")[0]
 
-    def sin_cubos(document: str) -> str:
-        return document.split(">Sin cubo<span", 1)[1].split("</section>")[0]
+    def photo_sections_html(document: str) -> list[str]:
+        return [
+            chunk.split("</section>")[0]
+            for chunk in document.split('<section class="photo-section">')[1:]
+        ]
 
     bucketed = documento({"a.jpg": ["Favoritas"]})
     unbucketed = documento({"b.jpg": ["Favoritas"]})
 
-    # a estaba en Favoritas y sale de esa seccion; queda solo en la de sin cubo.
+    # a estaba en Favoritas y sale de esa seccion; ya no esta en ninguna seccion de fotos.
     assert seccion_favoritas(bucketed).count('<article class="card flat"') == 1
     assert seccion_favoritas(unbucketed).count('<article class="card flat"') == 1
     assert seccion_favoritas(unbucketed).count('alt="b.jpg"') == 1
     assert seccion_favoritas(unbucketed).count('alt="a.jpg"') == 0
-    assert sin_cubos(unbucketed).count('alt="a.jpg"') == 1
+    assert all('alt="a.jpg"' not in chunk for chunk in photo_sections_html(unbucketed))
+    assert "Sin cubo" not in unbucketed
 
 
 # --- 6.9 las secciones de fotos no son destino de arrastre --------------------
@@ -1977,8 +1979,8 @@ def test_the_export_shows_the_marked_and_bucket_sections(tmp_path: Path) -> None
 
     assert ">Marcadas<span" in document
     assert ">Favoritas<span" in document
-    # La de sin cubo tambien sale: la otra foto no esta en ningun cubo.
-    assert ">Sin cubo<span" in document
+    # La foto sin cubo no sale en ninguna seccion de fotos.
+    assert ">Sin cubo<span" not in document
 
 
 def test_the_export_shows_the_bucket_section_next_to_the_marked_one(
@@ -1992,16 +1994,17 @@ def test_the_export_shows_the_bucket_section_next_to_the_marked_one(
     )
 
     assert document.index(">Marcadas<span") < document.index(">Favoritas<span")
-    assert document.index(">Favoritas<span") < document.index(">Sin cubo<span")
+    assert ">Sin cubo<span" not in document
 
 
-def test_the_export_shows_the_untagged_section_even_with_no_buckets_at_all(
+def test_the_export_shows_no_untagged_section_when_no_buckets_at_all(
     tmp_path: Path,
 ) -> None:
     document = _export_with(tmp_path, marked=[A_SHA])
 
     assert ">Marcadas<span" in document
-    assert ">Sin cubo<span" in document
+    # No untagged section when there are no buckets at all
+    assert ">Sin cubo<span" not in document
 
 
 def test_the_export_has_no_picker_and_no_bucket_controls(tmp_path: Path) -> None:
@@ -2187,28 +2190,6 @@ def test_a_truncated_section_still_carries_no_drop_target(miniaturas_baratas) ->
     html = _section_html(_seccion_de_fotos(PHOTOS_PER_SECTION + 5), Path("C:/fotos"), {})
 
     assert "data-drop" not in html
-
-
-def test_the_cap_is_what_keeps_the_untagged_section_affordable(
-    miniaturas_baratas,
-) -> None:
-    """El caso que rompia la pagina: marcar una foto llenaba 'Sin cubo' con la biblioteca."""
-    from fotos_plus import viewer
-
-    total = viewer.PHOTOS_PER_SECTION * 6
-    secciones = viewer.photo_sections(
-        [photo(f"f{i}.jpg", f"2024-01-01T{i // 60:02d}:{i % 60:02d}:00") for i in range(total)],
-        marked=["f0.jpg"],
-        photo_tags=["Favoritas"],
-        photo_tagged={"f0.jpg": ["Favoritas"]},
-    )
-    sin_cubo = [s for s in secciones if s.title == "Sin cubo"][0]
-
-    html = viewer._section_html(sin_cubo, Path("C:/fotos"), {})
-
-    assert sin_cubo.count == total - 1
-    assert html.count('<article class="card flat"') == viewer.PHOTOS_PER_SECTION
-    assert f'<span class="tag-section-count">{total - 1} fotos</span>' in html
 
 
 def test_the_marked_section_is_capped_too(miniaturas_baratas) -> None:
