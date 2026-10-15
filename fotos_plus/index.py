@@ -95,6 +95,11 @@ def poster_path_for(renders_dir: Path, sha256: str) -> Path:
     return Path(renders_dir) / f"{sha256}-poster.jpg"
 
 
+def thumb_path_for(renders_dir: Path, sha256: str) -> Path:
+    """Path of the cached grid thumbnail for the photo with that content hash."""
+    return Path(renders_dir) / f"{sha256}-thumb.jpg"
+
+
 def default_index_path(root: Path) -> Path:
     return index_path_for(root)
 

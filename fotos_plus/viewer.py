@@ -84,6 +84,7 @@ TAG_CATALOG_ID = "tag-catalog"
 BUCKET_CATALOG_ID = "bucket-catalog"
 UNCLASSIFIED_GROUP_KEY = "sin-clasificar"
 PHOTO_BROWSER_ID = "photo-browser"
+GROUP_GRID_ID = "group-grid"
 
 
 @dataclass
@@ -487,6 +488,22 @@ def _group_card(
     )
 
 
+def _grid_section() -> str:
+    """Contenedor de la rejilla de un grupo, oculto hasta abrirlo.
+
+    Solo existe en la pagina servida: sin servidor no hay de donde pedir la
+    lista ni los fijos. Las celdas las pinta el cliente al abrir cada grupo.
+    """
+    return (
+        f'<section class="group-grid" id="{GROUP_GRID_ID}" hidden>'
+        f'<button type="button" class="grid-back" id="{GROUP_GRID_ID}-back">'
+        "Volver</button>"
+        f'<h2 class="tag-section-title" id="{GROUP_GRID_ID}-title"></h2>'
+        f'<div class="grid-cells" id="{GROUP_GRID_ID}-cells"></div>'
+        "</section>"
+    )
+
+
 def _browser_overlay(token: Optional[str] = None) -> str:
     """El recorrido de fotos a pantalla completa, oculto hasta que se abre.
 
@@ -508,6 +525,7 @@ def _browser_overlay(token: Optional[str] = None) -> str:
         "Cerrar</button>"
         "</div>"
         f'<img class="browser-image" id="{PHOTO_BROWSER_ID}-image" alt="">'
+        f'<video class="browser-video" id="{PHOTO_BROWSER_ID}-video" controls hidden></video>'
         f'<p class="browser-status" id="{PHOTO_BROWSER_ID}-status"></p>'
         '<div class="browser-actions">'
         f'<button type="button" class="browser-prev" id="{PHOTO_BROWSER_ID}-prev">'
@@ -625,8 +643,8 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .video-duration { position: absolute; right: 4px; bottom: 4px; background: #000;
          color: #fff; font-size: 11px; padding: 1px 5px; border-radius: 4px; }
 .video-tile { display: flex; align-items: center; justify-content: center;
-         min-height: 60px; background: #2c3036; border-radius: 4px;
-         color: #9aa0a6; font-size: 12px; }
+         min-height: 36px; background: #2c3036; border-radius: 4px;
+         color: #9aa0a6; font-size: 10px; }
 .label-form { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; }
 .label-input { flex: 1 1 140px; min-width: 0; font: inherit; font-size: 12px;
                padding: 5px 8px; border-radius: 6px; border: 1px solid #3c4149;
@@ -654,6 +672,17 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .tag-error { flex: 1 0 100%; color: #e0b4b4; font-size: 12px; margin: 2px 0 0; }
 .card[draggable="true"] { cursor: grab; }
 .card.destino, .tag-section.destino { outline: 2px dashed #6f8fbf; outline-offset: 3px; }
+.group-grid { margin: 0 0 28px; }
+/* Las celdas van a la escala de las miniaturas de las tarjetas: grupo completo
+   como hoja de contactos, no pagina de imagenes grandes. Mantienen su
+   proporcion natural, igual que el resto de las miniaturas del visor. */
+.grid-cells { display: grid; gap: 8px;
+              grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); }
+.grid-back { font: inherit; font-size: 12px; cursor: pointer; margin: 0 0 10px;
+             padding: 5px 10px; border-radius: 6px; border: 1px solid #3c4149;
+             background: #2c3036; color: #e8eaed; }
+.grid-cell { padding: 0; border: 1px solid #2c3036; border-radius: 10px; overflow: hidden;
+             background: #1e2126; cursor: pointer; }
 .browse-open { font: inherit; font-size: 12px; cursor: pointer; margin: 0 0 8px;
                padding: 5px 10px; border-radius: 6px; border: 1px solid #3c4149;
                background: #2c3036; color: #e8eaed; }
@@ -668,6 +697,8 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .browser-position { margin: 0 auto 0 0; font-size: 13px; color: #9aa3ad; }
 .browser-image { max-width: 100%; max-height: 52vh; object-fit: contain;
                  background: #000; flex: 0 1 auto; }
+.browser-video { max-width: 100%; max-height: 52vh; background: #000;
+                 flex: 0 1 auto; }
 .browser-status { margin: 0; min-height: 1em; font-size: 12px; color: #9aa3ad; }
 .browser-actions { display: flex; gap: 10px; flex: 0 0 auto; }
 .browser-actions button, .browser-close { font: inherit; font-size: 13px;
@@ -971,6 +1002,7 @@ EDIT_SCRIPT = """
   if (browser) {
     var token = browser.getAttribute("data-token");
     var imagen = document.getElementById("photo-browser-image");
+    var video = document.getElementById("photo-browser-video");
     var posicion = document.getElementById("photo-browser-position");
     var titulo = document.getElementById("photo-browser-group");
     var estado = document.getElementById("photo-browser-status");
@@ -979,6 +1011,12 @@ EDIT_SCRIPT = """
     var botonSiguiente = document.getElementById("photo-browser-next");
     var botonCerrar = document.getElementById("photo-browser-close");
     var listaCubos = document.getElementById("photo-browser-bucket-list");
+    var tarjetas = document.getElementById("group-cards");
+    var rejilla = document.getElementById("group-grid");
+    var rejillaTitulo = document.getElementById("group-grid-title");
+    var rejillaCeldas = document.getElementById("group-grid-cells");
+    var botonRejillaVolver = document.getElementById("group-grid-back");
+    var claveActual = null;
     var entradaCubo = document.querySelector("#photo-browser .bucket-input");
     var botonCubo = document.getElementById("photo-browser-bucket-add");
     var errorCubo = document.getElementById("photo-browser-bucket-error");
@@ -1005,6 +1043,18 @@ EDIT_SCRIPT = """
         URL.revokeObjectURL(urlActual);
         urlActual = null;
       }
+    }
+
+    function soltarVideo() {
+      // Pausar antes de soltar: un video que sigue sonando sobre la foto
+      // siguiente es peor que un parpadeo al cambiar.
+      if (!video) { return; }
+      try { video.pause(); } catch (e) {}
+      video.removeAttribute("src");
+      video.removeAttribute("poster");
+      try { video.load(); } catch (e) {}
+      video.hidden = true;
+      imagen.hidden = false;
     }
 
     function pintarMarca(foto) {
@@ -1127,8 +1177,20 @@ EDIT_SCRIPT = """
       pintarCubos(foto);
       estado.textContent = "";
       soltarImagen();
-      var rutaFijo = esVideo ? "/poster?ref=" : "/render?ref=";
-      fetch(rutaFijo + encodeURIComponent(foto.ref), {
+      soltarVideo();
+      if (esVideo) {
+        // El <video> no puede mandar encabezados, asi que el token viaja como
+        // parametro: la pagina lo trae y las URLs del medio nunca van al historial.
+        var medio = "?ref=" + encodeURIComponent(foto.ref)
+          + "&token=" + encodeURIComponent(token);
+        imagen.hidden = true;
+        video.hidden = false;
+        video.poster = "/poster" + medio;
+        video.src = "/video" + medio;
+        return;
+      }
+      var rutaFoto = "/render?ref=" + encodeURIComponent(foto.ref);
+      fetch(rutaFoto, {
         headers: { "X-Fotos-Plus-Token": token }
       }).then(function (respuesta) {
         if (!respuesta.ok) { throw new Error("No se pudo preparar la foto"); }
@@ -1141,7 +1203,7 @@ EDIT_SCRIPT = """
       });
     }
 
-    function abrir(clave) {
+    function abrir(clave, indice) {
       estado.textContent = "Cargando...";
       fetch("/api/photos?group=" + encodeURIComponent(clave), {
         headers: { "X-Fotos-Plus-Token": token }
@@ -1154,24 +1216,109 @@ EDIT_SCRIPT = """
         });
       }).then(function (datos) {
         lista = datos.photos;
+        claveActual = clave;
         if (!lista.length) {
           estado.textContent = "Este grupo no tiene fotos";
           return;
         }
         titulo.textContent = datos.title;
         browser.hidden = false;
-        mostrar(0);
+        mostrar(indice || 0);
       }).catch(function (error) {
         estado.textContent = error.message;
       });
     }
 
+    function fichaVideo(foto) {
+      var marca = "";
+      if (typeof foto.duration_s === "number" && foto.duration_s >= 0) {
+        var total = Math.floor(foto.duration_s);
+        marca = Math.floor(total / 60) + ":" + ("0" + (total % 60)).slice(-2);
+      }
+      return marca ? "Video " + marca : "Video";
+    }
+
+    function urlMedio(base, ref) {
+      // Las etiquetas no mandan encabezados: el token viaja como parametro.
+      return base + "?ref=" + encodeURIComponent(ref)
+        + "&token=" + encodeURIComponent(token);
+    }
+
+    function mostrarRejilla() {
+      rejillaCeldas.textContent = "";
+      lista.forEach(function (foto, i) {
+        var boton = document.createElement("button");
+        boton.type = "button";
+        boton.className = "grid-cell";
+        boton.setAttribute("data-indice", String(i));
+        var esVideo = foto.kind === "video";
+        var img = document.createElement("img");
+        img.className = "thumb";
+        img.loading = "lazy";
+        img.src = urlMedio(esVideo ? "/poster" : "/thumb", foto.ref);
+        img.alt = foto.ref;
+        if (esVideo) {
+          // Sin decodificador el fijo no existe: la ficha con duracion ocupa su lugar.
+          img.addEventListener("error", function () {
+            var ficha = document.createElement("span");
+            ficha.className = "video-tile";
+            ficha.textContent = fichaVideo(foto);
+            if (img.parentNode === boton) { boton.replaceChild(ficha, img); }
+          });
+        }
+        boton.appendChild(img);
+        boton.addEventListener("click", function () { abrir(claveActual, i); });
+        rejillaCeldas.appendChild(boton);
+      });
+      rejillaTitulo.textContent = titulo.textContent
+        + " (" + lista.length + ")";
+    }
+
+    function abrirRejilla(clave) {
+      fetch("/api/photos?group=" + encodeURIComponent(clave), {
+        headers: { "X-Fotos-Plus-Token": token }
+      }).then(function (respuesta) {
+        return respuesta.json().then(function (datos) {
+          if (!respuesta.ok) {
+            throw new Error(datos.error || "No se pudo abrir el grupo");
+          }
+          return datos;
+        });
+      }).then(function (datos) {
+        lista = datos.photos;
+        claveActual = clave;
+        if (!lista.length) {
+          rejillaTitulo.textContent = "Este grupo no tiene fotos";
+          return;
+        }
+        titulo.textContent = datos.title;
+        mostrarRejilla();
+        tarjetas.hidden = true;
+        rejilla.hidden = false;
+      }).catch(function (error) {
+        rejillaTitulo.textContent = error.message;
+        tarjetas.hidden = true;
+        rejilla.hidden = false;
+      });
+    }
+
+    function volverTarjetas() {
+      rejilla.hidden = true;
+      tarjetas.hidden = false;
+    }
+
     function cerrar() {
       browser.hidden = true;
       soltarImagen();
+      soltarVideo();
       imagen.removeAttribute("src");
-      lista = [];
       pintarCubos(null);
+      // Cerrar vuelve a la rejilla que abrio el recorrido, no a las tarjetas.
+      if (rejillaCeldas.childElementCount) {
+        rejilla.hidden = false;
+      } else {
+        tarjetas.hidden = false;
+      }
     }
 
     function alternarMarca() {
@@ -1208,9 +1355,13 @@ EDIT_SCRIPT = """
 
     document.querySelectorAll(".browse-open").forEach(function (boton) {
       boton.addEventListener("click", function () {
-        abrir(boton.getAttribute("data-browse-key"));
+        abrirRejilla(boton.getAttribute("data-browse-key"));
       });
     });
+
+    if (botonRejillaVolver) {
+      botonRejillaVolver.addEventListener("click", volverTarjetas);
+    }
 
     botonPrevio.addEventListener("click", function () { mostrar(indice - 1); });
     botonSiguiente.addEventListener("click", function () { mostrar(indice + 1); });
@@ -1225,7 +1376,14 @@ EDIT_SCRIPT = """
     }
 
     document.addEventListener("keydown", function (evento) {
-      if (browser.hidden) { return; }
+      if (browser.hidden) {
+        // Con la rejilla abierta, Escape vuelve a las tarjetas.
+        if (evento.key === "Escape" && rejilla && !rejilla.hidden) {
+          evento.preventDefault();
+          volverTarjetas();
+        }
+        return;
+      }
       // Escribir con el teclado es asunto de otro campo: las flechas se dejan pasar.
       if (escribiendo(evento)) { return; }
       if (evento.key === "ArrowLeft") {
@@ -1419,6 +1577,7 @@ def render_html(
     catalog = _tag_catalog(tag_options, groups) if editable else ""
     buckets = _bucket_catalog(photo_tags) if editable else ""
     browser = _browser_overlay(token) if editable else ""
+    grid = _grid_section() if editable else ""
 
     return (
         "<!doctype html>\n"
@@ -1433,7 +1592,8 @@ def render_html(
         f"<h1>{html.escape(title)}</h1>\n"
         f'<p class="notice">{html.escape(notices)}</p>\n'
         f"{_drift_notice(drift)}"
-        f"{body}\n"
+        f'<div id="group-cards">{body}</div>\n'
+        f"{grid}"
         f"{catalog}"
         f"{buckets}"
         f"{browser}"

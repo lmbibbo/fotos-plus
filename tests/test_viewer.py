@@ -1407,7 +1407,7 @@ def test_the_shown_date_follows_the_photo_because_navigation_reassigns_the_line(
     for salto in (
         "botonPrevio.addEventListener(\"click\", function () { mostrar(indice - 1); });",
         "botonSiguiente.addEventListener(\"click\", function () { mostrar(indice + 1); });",
-        "mostrar(0);",
+        "mostrar(indice || 0);",
     ):
         assert salto in document, f"ningun camino de navegacion llama a mostrar: {salto}"
 
@@ -1419,8 +1419,8 @@ def test_the_browser_asks_the_server_for_the_photo(tmp_path: Path) -> None:
 
     document = _browser_html(root, ["a.jpg"])
 
-    assert 'fetch(rutaFijo + encodeURIComponent(foto.ref)' in document
-    assert 'var rutaFijo = esVideo ? "/poster?ref=" : "/render?ref=";' in document
+    assert 'fetch(rutaFoto, {' in document
+    assert 'var rutaFoto = "/render?ref=" + encodeURIComponent(foto.ref);' in document
     assert '"X-Fotos-Plus-Token": token' in document
     assert "URL.createObjectURL(blob)" in document
     assert "URL.revokeObjectURL(urlActual)" in document
@@ -1522,6 +1522,104 @@ def test_the_exported_html_has_no_browser(tmp_path: Path) -> None:
     assert "/api/photos" not in document
     assert "/api/marks" not in document
     assert "<script>" not in document
+
+
+# --- la rejilla de un grupo ------------------------------------------------------
+
+
+def test_the_grid_is_served_hidden_with_a_back_control(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _browser_html(root, ["a.jpg"])
+
+    assert '<section class="group-grid" id="group-grid" hidden>' in document
+    assert 'id="group-grid-back"' in document
+    assert 'id="group-grid-cells"' in document
+
+
+def test_the_grid_cells_carry_the_thumb_scale_columns(tmp_path: Path) -> None:
+    """Las celdas van a la escala de las miniaturas de las tarjetas, sin recorte."""
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _browser_html(root, ["a.jpg"])
+
+    assert '<div class="grid-cells" id="group-grid-cells">' in document
+    assert ".grid-cells { display: grid; gap: 8px;" in document
+    assert "grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); }" in document
+    assert ".video-tile" in document
+    assert "min-height: 36px;" in document
+
+
+def test_cells_render_one_lazy_item_in_browse_order(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _browser_html(root, ["a.jpg", "b.jpg"])
+
+    assert "lista.forEach(function (foto, i)" in document
+    assert 'boton.setAttribute("data-indice", String(i));' in document
+    assert 'img.loading = "lazy";' in document
+
+
+def test_photo_cells_ask_for_thumbs_and_video_cells_for_posters(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _browser_html(root, ["a.jpg"])
+
+    assert 'img.src = urlMedio(esVideo ? "/poster" : "/thumb", foto.ref);' in document
+    assert '"/render", foto.ref' not in document
+
+
+def test_a_video_cell_falls_back_to_the_duration_tile(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _browser_html(root, ["a.jpg"])
+
+    assert 'ficha.className = "video-tile";' in document
+    assert "boton.replaceChild(ficha, img)" in document
+
+
+def test_clicking_a_cell_opens_the_browser_at_that_index(tmp_path: Path) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _browser_html(root, ["a.jpg", "b.jpg"])
+
+    assert "function abrir(clave, indice)" in document
+    assert "mostrar(indice || 0);" in document
+    assert 'boton.addEventListener("click", function () { abrir(claveActual, i); });' in document
+
+
+def test_closing_returns_to_the_grid_and_the_back_control_to_the_cards(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _browser_html(root, ["a.jpg"])
+
+    cerrar = _sentencia(document, r"function cerrar\(\) \{.*?\n    \}")
+    assert "rejilla.hidden = false" in cerrar
+    assert "tarjetas.hidden = false" in cerrar
+    volver = _sentencia(document, r"function volverTarjetas\(\) \{.*?\n    \}")
+    assert "rejilla.hidden = true" in volver
+    assert "tarjetas.hidden = false" in volver
+
+
+def test_the_export_has_no_grid(tmp_path: Path) -> None:
+    """Sin servidor no hay lista ni miniaturas que pedir: el export no lleva rejilla."""
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _browser_html(root, ["a.jpg"], token=None)
+
+    assert '<section class="group-grid"' not in document
+    assert "/thumb" not in document
+    assert "/poster" not in document
 
 
 # --- 6.1 y 6.2 la forma de seccion y su construccion ---------------------------
@@ -2233,7 +2331,7 @@ def video_item(name: str, captured_at: str | None, duration_s: float | None = 12
     return item
 
 
-def _video_group_html(tmp_path: Path, **kwargs) -> str:
+def _video_group_html(tmp_path: Path, token: str | None = "t0ken", **kwargs) -> str:
     from tests.test_video import make_video
 
     root = tmp_path / "fotos"
@@ -2250,7 +2348,7 @@ def _video_group_html(tmp_path: Path, **kwargs) -> str:
     )
     from fotos_plus.viewer import render_html
 
-    return render_html(groups, str(root), token="t0ken", **kwargs)
+    return render_html(groups, str(root), token=token, **kwargs)
 
 
 def test_a_video_card_shows_its_poster_with_duration(tmp_path: Path, monkeypatch) -> None:
@@ -2292,12 +2390,23 @@ def test_a_video_card_is_distinguishable_from_a_photo_card(tmp_path: Path, monke
     assert 'class="video-thumb"' in document
 
 
-def test_the_browser_requests_the_poster_for_videos() -> None:
+def test_the_browser_plays_videos_with_native_controls(tmp_path: Path) -> None:
     from fotos_plus.viewer import EDIT_SCRIPT
 
-    assert "/poster?ref=" in EDIT_SCRIPT
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _browser_html(root, ["a.jpg"])
+
+    assert 'id="photo-browser-video"' in document
+    assert "<video" in document
+    assert "controls" in document
     assert 'foto.kind === "video"' in EDIT_SCRIPT
+    assert "/video" in EDIT_SCRIPT
+    assert "video.poster" in EDIT_SCRIPT
     assert "duration_s" in EDIT_SCRIPT
+    assert "soltarVideo" in EDIT_SCRIPT
+    assert "video.pause()" in EDIT_SCRIPT
 
 
 def test_the_export_embeds_video_posters_and_no_blobs(tmp_path: Path, monkeypatch) -> None:
@@ -2305,7 +2414,7 @@ def test_the_export_embeds_video_posters_and_no_blobs(tmp_path: Path, monkeypatc
 
     monkeypatch.setattr(fotos_plus.viewer, "make_poster", lambda path: b"\xff\xd8poster")
 
-    document = _video_group_html(tmp_path)
+    document = _video_group_html(tmp_path, token=None)
 
     assert "video-thumb" in document
     assert "<video" not in document
