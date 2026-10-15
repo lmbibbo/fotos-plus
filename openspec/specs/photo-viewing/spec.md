@@ -345,13 +345,13 @@ El servidor DEBE (MUST) aceptar la asignación y el borrado de un tag de un grup
 In `--serve` mode the viewer MUST offer, for each group that owns at least one photo, a way to open
 a grid page showing every photo and video of that group, each with a thumb at the scale the group
 cards use. Selecting an element of the grid MUST open the full-screen browser at that item. The
-browser SHALL advance to the
-previous and next photo, SHALL be operable from the keyboard for both directions, and SHALL show
-which photo of the group is currently displayed and how many the group holds. When the displayed
-photo carries a capture date, the browser SHALL also show that date in the `YYYY-MM-DD` form next to
-that position. When the displayed photo carries no capture date, the browser SHALL show the position
-alone, without a placeholder standing in for the date. Reaching the first or the last photo SHALL
-leave the viewer on that photo rather than moving past the ends of the group.
+browser SHALL advance to the previous and next photo, SHALL be operable from the keyboard for both
+directions, and SHALL show which photo of the group is currently displayed and how many the group
+holds. When the displayed photo carries a capture date, the browser SHALL also show that date in
+the `YYYY-MM-DD` form next to that position. When the displayed photo carries no capture date, the
+browser SHALL show the position alone, without a placeholder standing in for the date. Reaching the
+first or the last photo SHALL leave the viewer on that photo rather than moving past the ends of
+the group.
 
 #### Scenario: Opening the browser from a group
 
@@ -496,12 +496,12 @@ instead.
 
 ### Requirement: The media endpoints require the token and resolve through the index
 
-The render and thumbnail endpoints MUST require the same random token the served page already
-carries, and MUST refuse a request whose host header is not a loopback address, matching the
-guarantees already required of edits. Both endpoints MUST accept a photo reference that names a
-photo in the index and MUST resolve it through the index, so that a caller-supplied value is never
-used directly to read or write a filesystem path. A reference that the index does not contain MUST
-be refused with a reason.
+The render and thumbnail endpoints MUST require the same random token the served page
+already carries, and MUST refuse a request whose host header is not a loopback address,
+matching the guarantees already required of edits. Both endpoints MUST accept a photo
+reference that names a photo in the index and MUST resolve it through the index, so that
+a caller-supplied value is never used directly to read or write a filesystem path. A
+reference that the index does not contain MUST be refused with a reason.
 
 #### Scenario: Request without the valid token
 
@@ -772,18 +772,59 @@ no tag editor.
 
 ### Requirement: Videos in the served browser show a still without playback
 
-In `--serve` mode, opening a video in the group browser MUST show a still image of that
-video with its duration marked, and MUST NOT offer playback in this phase. The `/render`
-endpoint keeps serving photos only and MUST refuse video references with a reason. Video
-blobs MUST never be embedded in the static export; the export shows video posters exactly
-like photo thumbnails.
+In `--serve` mode, opening a video in the group browser MUST play it with native browser
+controls, using its poster still as the pre-playback frame. Playback MUST start on user
+action; the viewer MUST NOT autoplay videos. Arrow keys MUST keep moving between items;
+seeking within a video happens through its native controls. A new `/video` endpoint MUST
+serve the original file with single-range partial responses under the same guarantees as
+`/render` (random token, loopback host, cross-origin refusal, index-resolved reference).
+Media-element URLs (`<video src>`, `poster`) carry the token as a query parameter, since
+tags cannot set headers; subresource URLs are never stored in browser history.
+The `/render` endpoint keeps serving photos only and MUST refuse video references with a
+reason. Video blobs MUST never be embedded in the static export; the export shows video
+posters exactly like photo thumbnails.
 
 #### Scenario: Browser opened on a video
 
 - **GIVEN** a group holding a video, served with `view --serve`
 - **WHEN** the browser opens on that video
-- **THEN** a still image of the video appears with its duration marked
-- **AND** no playback control is offered
+- **THEN** a `<video>` element appears with native controls and the poster still
+- **AND** playback starts only on user action
+
+#### Scenario: Arrow keys keep navigating on a video
+
+- **GIVEN** the browser opened on a video
+- **WHEN** the user presses an arrow key
+- **THEN** the browser moves to the previous or next item
+- **AND** no seek is performed by the viewer
+
+#### Scenario: Video bytes are served with ranges
+
+- **GIVEN** a video recorded in the scanned index
+- **WHEN** its reference is requested from the `/video` endpoint without a Range header
+- **THEN** the endpoint answers 200 with the full file and `Accept-Ranges: bytes`
+- **AND** a request with a single satisfiable byte range answers 206 with that slice
+  and a matching `Content-Range`
+
+#### Scenario: Unsatisfiable range is refused
+
+- **GIVEN** a video recorded in the scanned index
+- **WHEN** its reference is requested with a byte range past the end of the file
+- **THEN** the endpoint answers 416
+
+#### Scenario: Video endpoint keeps the render guarantees
+
+- **GIVEN** the `/video` endpoint
+- **WHEN** it is requested without the random token, from a non-loopback host, with a
+  cross-site fetch mode, or with a reference the index does not contain
+- **THEN** it refuses exactly like `/render` does
+
+#### Scenario: Media tag authenticates with the token in the URL
+
+- **GIVEN** a video recorded in the scanned index
+- **WHEN** its reference is requested from `/video` with the token as a query
+  parameter and no header token
+- **THEN** the endpoint serves the bytes
 
 #### Scenario: Render endpoint refuses a video
 
@@ -797,3 +838,4 @@ like photo thumbnails.
 - **WHEN** the document is inspected
 - **THEN** video posters appear exactly like photo thumbnails
 - **AND** the document embeds no video blob
+- **AND** the document contains no `<video>` element
