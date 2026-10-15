@@ -41,15 +41,21 @@ echo Cambiando a main...
 git switch main
 if errorlevel 1 goto failed
 
-echo Mergeando el PR y eliminando las ramas local y remota...
-gh pr merge "%BRANCH%" --merge --delete-branch
+for /f "delims=" %%A in ('gh pr view "%BRANCH%" --json number --jq .number') do set "PR_NUMBER=%%A"
+if not defined PR_NUMBER goto failed
+
+echo Habilitando auto-merge del PR...
+gh pr merge "%PR_NUMBER%" --merge --auto --delete-branch
 if errorlevel 1 goto failed
+
+for /f "delims=" %%A in ('gh pr view "%PR_NUMBER%" --json state --jq .state') do set "PR_STATE=%%A"
+if /I not "%PR_STATE%"=="MERGED" goto merge_queued
 
 echo Actualizando main...
 git pull origin main
 if errorlevel 1 goto failed
 
-echo Listo: PR mergeado y rama eliminada.
+echo Listo: PR mergeado y ramas eliminadas.
 goto done
 
 :usage
@@ -71,6 +77,15 @@ goto failed
 
 :cancelled
 echo PR creado. No se mergeo ni se elimino la rama.
+goto done
+
+:merge_queued
+echo Auto-merge habilitado. GitHub mergeara el PR cuando se cumplan los requisitos.
+echo La rama se conserva hasta que el PR figure como MERGED.
+echo Entonces actualiza main y elimina la rama con:
+echo   git pull origin main
+echo   git branch -d "%BRANCH%"
+echo   git push origin --delete "%BRANCH%"
 goto done
 
 :failed
