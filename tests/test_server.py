@@ -1208,6 +1208,327 @@ def test_the_poster_endpoint_reports_when_no_decoder(
     assert status == 422
 
 
+# --- miniatura de rejilla de una foto -------------------------------------------
+
+
+def fetch_thumb(url: str, token: str | None, reference: str, headers: dict | None = None):
+    quoted = urllib.parse.quote(reference, safe="")
+    all_headers = dict(headers or {})
+    if token is not None:
+        all_headers.setdefault("X-Fotos-Plus-Token", token)
+    request = urllib.request.Request(f"{url}/thumb?ref={quoted}", headers=all_headers)
+    try:
+        with urllib.request.urlopen(request, timeout=10) as respuesta:
+            return respuesta.status, respuesta.read(), dict(respuesta.headers)
+    except urllib.error.HTTPError as error:
+        return error.code, error.read(), dict(error.headers)
+
+
+def test_a_thumb_is_served_as_a_jpeg(tmp_path: Path, serving) -> None:
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data, headers = fetch_thumb(url, token, "a.jpg")
+
+    assert status == 200
+    assert headers["Content-Type"] == "image/jpeg"
+    assert headers["Content-Length"] == str(len(data))
+    assert data[:2] == b"\xff\xd8"
+
+
+def test_a_thumb_stays_at_thumbnail_scale(tmp_path: Path, serving) -> None:
+    from io import BytesIO
+
+    from PIL import Image as pil_image
+
+    from fotos_plus.photos import THUMBNAIL_SIZE
+
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path)
+
+    _, data, _ = fetch_thumb(url, token, "a.jpg")
+
+    with pil_image.open(BytesIO(data)) as thumb:
+        assert max(thumb.size) <= THUMBNAIL_SIZE
+
+
+def test_a_thumb_is_far_smaller_than_the_render(tmp_path: Path, serving) -> None:
+    """La rejilla pide miniaturas, no renders de pantalla: bytes acordes al tamano."""
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path)
+
+    render = fetch_render(url, token, "a.jpg")[1]
+    thumb = fetch_thumb(url, token, "a.jpg")[1]
+
+    assert len(thumb) < len(render)
+
+
+def test_the_second_thumb_is_not_produced_again(tmp_path: Path, serving) -> None:
+    """La segunda peticion sale de la miniatura guardada, junto a los renders."""
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path)
+
+    first = fetch_thumb(url, token, "a.jpg")[1]
+    second = fetch_thumb(url, token, "a.jpg")[1]
+
+    assert first == second
+    stored = index_path.parent / "indice-renders"
+    assert [p.name for p in stored.iterdir()] == ["a-thumb.jpg"]
+
+
+def test_a_thumb_accepts_the_token_in_the_url(tmp_path: Path, serving) -> None:
+    """Las celdas son `<img>`: no mandan encabezados, el token viaja en la URL."""
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path)
+    quoted = urllib.parse.quote("a.jpg", safe="")
+    guardado = urllib.parse.quote(token, safe="")
+    request = urllib.request.Request(f"{url}/thumb?ref={quoted}&token={guardado}")
+    try:
+        with urllib.request.urlopen(request, timeout=10) as respuesta:
+            status = respuesta.status
+    except urllib.error.HTTPError as error:
+        status = error.code
+
+    assert status == 200
+
+
+def test_a_thumb_with_a_wrong_token_is_refused(tmp_path: Path, serving) -> None:
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data, _ = fetch_thumb(url, token, "a.jpg", headers={"X-Fotos-Plus-Token": "nope"})
+
+    assert status == 403
+    assert data[:2] != b"\xff\xd8"
+
+
+def test_a_thumb_with_no_token_at_all_is_refused(tmp_path: Path, serving) -> None:
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data, _ = fetch_thumb(url, None, "a.jpg")
+
+    assert status == 403
+    assert data[:2] != b"\xff\xd8"
+
+
+def test_a_thumb_from_a_cross_origin_page_is_refused(tmp_path: Path, serving) -> None:
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data, _ = fetch_thumb(
+        url, token, "a.jpg", headers={"Sec-Fetch-Site": "cross-site"}
+    )
+
+    assert status == 403
+    assert data[:2] != b"\xff\xd8"
+
+
+def test_a_thumb_of_a_reference_outside_the_index_is_refused(
+    tmp_path: Path, serving
+) -> None:
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data, _ = fetch_thumb(url, token, "../afuera.jpg")
+
+    assert status == 404
+    assert data[:2] != b"\xff\xd8"
+
+
+def test_a_thumb_does_not_write_into_the_library(tmp_path: Path, serving) -> None:
+    index_path = build_index(tmp_path)
+    url, token = serving(index_path)
+
+    fetch_thumb(url, token, "a.jpg")
+
+    root = index_path.parent / "fotos"
+    assert sorted(p.name for p in root.iterdir()) == ["a.jpg", "b.jpg"]
+
+
+def test_the_thumb_endpoint_refuses_a_video(tmp_path: Path, serving) -> None:
+    index_path = build_video_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data, _ = fetch_thumb(url, token, "clip.mp4")
+
+    assert status == 422
+    assert "video" in json.loads(data.decode("utf-8"))["error"]
+
+
+# --- 4b. video servido con rangos ------------------------------------------------
+
+
+def fetch_video(url: str, token: str | None, reference: str, headers: dict | None = None):
+    quoted = urllib.parse.quote(reference, safe="")
+    all_headers = dict(headers or {})
+    if token is not None:
+        all_headers.setdefault("X-Fotos-Plus-Token", token)
+    request = urllib.request.Request(f"{url}/video?ref={quoted}", headers=all_headers)
+    try:
+        with urllib.request.urlopen(request, timeout=10) as respuesta:
+            return respuesta.status, respuesta.read(), dict(respuesta.headers)
+    except urllib.error.HTTPError as error:
+        return error.code, error.read(), dict(error.headers)
+
+
+def fetch_video_with_query_token(url: str, token: str, reference: str):
+    quoted = urllib.parse.quote(reference, safe="")
+    quoted_token = urllib.parse.quote(token, safe="")
+    request = urllib.request.Request(
+        f"{url}/video?ref={quoted}&token={quoted_token}",
+        headers={"Host": "127.0.0.1"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as respuesta:
+            return respuesta.status, respuesta.read(), dict(respuesta.headers)
+    except urllib.error.HTTPError as error:
+        return error.code, error.read(), dict(error.headers)
+
+
+def test_the_video_endpoint_serves_the_full_file(tmp_path: Path, serving) -> None:
+    index_path = build_video_index(tmp_path)
+    url, token = serving(index_path)
+    expected = (tmp_path / "fotos" / "clip.mp4").read_bytes()
+
+    status, data, headers = fetch_video(url, token, "clip.mp4")
+
+    assert status == 200
+    assert data == expected
+    assert headers.get("Accept-Ranges") == "bytes"
+    assert headers.get("Content-Type") == "video/mp4"
+
+
+def test_the_video_endpoint_serves_a_byte_slice(tmp_path: Path, serving) -> None:
+    index_path = build_video_index(tmp_path)
+    url, token = serving(index_path)
+    expected = (tmp_path / "fotos" / "clip.mp4").read_bytes()
+
+    status, data, headers = fetch_video(
+        url, token, "clip.mp4", headers={"Range": "bytes=0-9"}
+    )
+
+    assert status == 206
+    assert data == expected[0:10]
+    assert headers.get("Content-Range") == f"bytes 0-9/{len(expected)}"
+    assert headers.get("Accept-Ranges") == "bytes"
+
+
+def test_the_video_endpoint_serves_an_open_ended_slice(tmp_path: Path, serving) -> None:
+    index_path = build_video_index(tmp_path)
+    url, token = serving(index_path)
+    expected = (tmp_path / "fotos" / "clip.mp4").read_bytes()
+
+    status, data, headers = fetch_video(
+        url, token, "clip.mp4", headers={"Range": "bytes=4-"}
+    )
+
+    assert status == 206
+    assert data == expected[4:]
+    assert headers.get("Content-Range") == f"bytes 4-{len(expected) - 1}/{len(expected)}"
+
+
+def test_the_video_endpoint_serves_a_suffix_slice(tmp_path: Path, serving) -> None:
+    index_path = build_video_index(tmp_path)
+    url, token = serving(index_path)
+    expected = (tmp_path / "fotos" / "clip.mp4").read_bytes()
+
+    status, data, _ = fetch_video(
+        url, token, "clip.mp4", headers={"Range": "bytes=-5"}
+    )
+
+    assert status == 206
+    assert data == expected[-5:]
+
+
+def test_the_video_endpoint_refuses_a_range_past_the_end(
+    tmp_path: Path, serving
+) -> None:
+    index_path = build_video_index(tmp_path)
+    url, token = serving(index_path)
+    size = (tmp_path / "fotos" / "clip.mp4").stat().st_size
+
+    status, _, headers = fetch_video(
+        url, token, "clip.mp4", headers={"Range": f"bytes={size}-{size + 10}"}
+    )
+
+    assert status == 416
+    assert headers.get("Content-Range") == f"bytes */{size}"
+
+
+def test_the_video_endpoint_refuses_multiple_ranges(tmp_path: Path, serving) -> None:
+    index_path = build_video_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, _, _ = fetch_video(
+        url, token, "clip.mp4", headers={"Range": "bytes=0-1,3-4"}
+    )
+
+    assert status == 400
+
+
+def test_the_video_endpoint_refuses_a_photo(tmp_path: Path, serving) -> None:
+    index_path = build_video_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, data, _ = fetch_video(url, token, "a.jpg")
+
+    assert status == 400
+    assert "video" in json.loads(data.decode("utf-8"))["error"]
+
+
+def test_the_video_endpoint_refuses_without_token(tmp_path: Path, serving) -> None:
+    index_path = build_video_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, _, _ = fetch_video(url, None, "clip.mp4")
+
+    assert status == 403
+
+
+def test_the_video_endpoint_accepts_the_token_in_the_url(
+    tmp_path: Path, serving
+) -> None:
+    index_path = build_video_index(tmp_path)
+    url, token = serving(index_path)
+    expected = (tmp_path / "fotos" / "clip.mp4").read_bytes()
+
+    status, data, _ = fetch_video_with_query_token(url, token, "clip.mp4")
+
+    assert status == 200
+    assert data == expected
+
+
+def test_the_video_endpoint_refuses_a_cross_origin_page(tmp_path: Path, serving) -> None:
+    index_path = build_video_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, _, _ = fetch_video(
+        url, token, "clip.mp4", headers={"Sec-Fetch-Site": "cross-site"}
+    )
+
+    assert status == 403
+
+
+def test_the_video_endpoint_refuses_an_unknown_reference(
+    tmp_path: Path, serving
+) -> None:
+    index_path = build_video_index(tmp_path)
+    url, token = serving(index_path)
+
+    status, _, _ = fetch_video(url, token, "falta.mp4")
+
+    assert status == 404
+
+
+def test_the_video_mime_follows_the_container() -> None:
+    from fotos_plus.server import VIDEO_MIME_TYPES
+
+    assert VIDEO_MIME_TYPES[".mp4"] == "video/mp4"
+    assert VIDEO_MIME_TYPES[".mov"] == "video/quicktime"
+    assert VIDEO_MIME_TYPES[".3gp"] == "video/3gpp"
+
+
 def test_the_photo_list_reports_the_mark_state_of_each_photo(
     tmp_path: Path, serving
 ) -> None:

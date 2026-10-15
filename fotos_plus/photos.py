@@ -298,6 +298,25 @@ def cached_render(photo_path: Path, sha256: str, render_path: Path) -> bytes:
     return data
 
 
+def cached_thumb(photo_path: Path, sha256: str, thumb_path: Path) -> bytes:
+    """Returns the photo's grid thumbnail, producing it only if it is not stored yet.
+
+    Thumbs follow the same rules as renders: identified by content hash, disposable, and
+    safe to delete. They are the same bytes the export embeds, so the grid shows the
+    cards' thumbnail scale rather than a downscaled screen render.
+    """
+    thumb_path = Path(thumb_path)
+    if thumb_path.is_file():
+        return thumb_path.read_bytes()
+    data = make_thumbnail(photo_path)
+    try:
+        thumb_path.parent.mkdir(parents=True, exist_ok=True)
+        thumb_path.write_bytes(data)
+    except OSError:
+        return data
+    return data
+
+
 def cached_poster(video_path: Path, sha256: str, poster_path: Path) -> bytes:
     """Returns the video's poster frame, producing it only if it is not stored yet.
 

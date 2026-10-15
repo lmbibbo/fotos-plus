@@ -3,6 +3,7 @@ from __future__ import annotations
 import http.server
 import json
 import secrets
+import shutil
 import socket
 import string
 from pathlib import Path
@@ -15,6 +16,7 @@ from .index import (
     render_path_for,
     renders_dir_next_to,
     suggestions_path_next_to,
+    thumb_path_for,
 )
 from .labels import (
     LabelError,
@@ -35,12 +37,54 @@ from .labels import (
     write_edicion,
 )
 from .index import read_index, read_suggestions
-from .photos import PhotoError, cached_poster, cached_render
+from .photos import PhotoError, cached_poster, cached_render, cached_thumb
 from .viewer import _photo_sort_key, assign_groups, render_html
 
 
 class EditServerError(Exception):
     """Error al arrancar o al operar el servidor de edicion."""
+
+
+VIDEO_MIME_TYPES = {
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".3gp": "video/3gpp",
+}
+
+_VIDEO_CHUNK_BYTES = 1024 * 1024
+
+
+def _parse_single_range(header: str, size: int) -> tuple[int, int] | None:
+    """Parse a single `Range: bytes=<start>-<end?>` header into inclusive bounds.
+
+    Returns None when the header is absent or malformed (the caller then serves
+    the full file). Raises ValueError for a well-formed but unsatisfiable range
+    and for multi-range requests, which this server refuses.
+    """
+    if not header:
+        return None
+    if "," in header:
+        raise ValueError("no se sirven rangos multiples")
+    unit, _, spec = header.partition("=")
+    if unit.strip().lower() != "bytes" or not spec.strip():
+        return None
+    first, dash, last = spec.strip().partition("-")
+    if not dash:
+        return None
+    try:
+        if not first:
+            suffix = int(last)
+            if suffix <= 0:
+                return None
+            start = max(size - suffix, 0)
+            return (start, size - 1) if size else None
+        start = int(first)
+        end = int(last) if last else size - 1
+    except ValueError:
+        return None
+    if start >= size or end < start:
+        raise ValueError("rango fuera del archivo")
+    return start, min(end, size - 1)
 
 
 def _is_loopback(host: str) -> bool:
@@ -64,6 +108,22 @@ def _is_cross_origin(headers) -> bool:
     in `Sec-Fetch-Site`, and a genuine same-origin request never sends `cross-site`.
     """
     return headers.get("Sec-Fetch-Site", "") in {"cross-site", "same-site"}
+
+
+def _media_token(headers, query: dict[str, list[str]]) -> Optional[str]:
+    """Token for media-element URLs, which cannot set request headers.
+
+    Accepts the usual header token or a single `token` query parameter. Every other
+    guarantee (loopback host, cross-origin refusal, unpredictability) still applies,
+    and subresource URLs never land in browser history.
+    """
+    header = headers.get("X-Fotos-Plus-Token")
+    if header:
+        return header
+    values = query.get("token") or []
+    if len(values) == 1 and values[0]:
+        return values[0]
+    return None
 
 
 class _LabelHandler(http.server.BaseHTTPRequestHandler):
@@ -133,8 +193,14 @@ class _LabelHandler(http.server.BaseHTTPRequestHandler):
         if path == "/render":
             self._serve_render(parse_qs(split.query))
             return
+        if path == "/thumb":
+            self._serve_thumb(parse_qs(split.query))
+            return
         if path == "/poster":
             self._serve_poster(parse_qs(split.query))
+            return
+        if path == "/video":
+            self._serve_video(parse_qs(split.query))
             return
         if path == "/api/photos":
             self._serve_photos(parse_qs(split.query))
@@ -170,7 +236,7 @@ class _LabelHandler(http.server.BaseHTTPRequestHandler):
             return
 
         if photo.kind == "video":
-            self._send_json(422, {"error": "los videos no tienen render: esta fase no reproduce video"})
+            self._send_json(422, {"error": "los videos no tienen render: se sirven por /video"})
             return
 
         source = server.root / photo.relative_path
@@ -184,15 +250,59 @@ class _LabelHandler(http.server.BaseHTTPRequestHandler):
             return
         self._send_image(200, data)
 
+    def _serve_thumb(self, query: dict[str, list[str]]) -> None:
+        """Sirve la miniatura de rejilla de una foto del indice.
+
+        Comparte las garantias del render — resolucion por indice, host de loopback,
+        rechazo de otro origen — y admite el token como parametro, porque las celdas de
+        la rejilla son etiquetas `<img>` que no pueden mandar encabezados. Devuelve la
+        miniatura de 200 px, la misma que embebe el export, no el render de pantalla.
+        """
+        server = self.server
+
+        if _media_token(self.headers, query) != server.token:
+            self._send_json(403, {"error": "token invalido"})
+            return
+
+        if _is_cross_origin(self.headers):
+            self._send_json(403, {"error": "peticion de otro origen rechazada"})
+            return
+
+        values = query.get("ref") or []
+        if len(values) != 1:
+            self._send_json(400, {"error": "falta la referencia de la foto"})
+            return
+
+        photo = server.photo_for(values[0])
+        if photo is None:
+            self._send_json(404, {"error": "la referencia no corresponde a ninguna foto"})
+            return
+
+        if photo.kind == "video":
+            self._send_json(422, {"error": "los videos no tienen miniatura: se sirven por /poster"})
+            return
+
+        source = server.root / photo.relative_path
+        try:
+            data = cached_thumb(source, photo.sha256, server.thumb_path(photo.sha256))
+        except PhotoError as error:
+            self._send_json(422, {"error": f"no se pudo preparar la miniatura: {error}"})
+            return
+        except OSError as error:
+            self._send_json(500, {"error": f"no se pudo leer la foto: {error}"})
+            return
+        self._send_image(200, data)
+
     def _serve_poster(self, query: dict[str, list[str]]) -> None:
         """Sirve el fotograma fijo de un video del indice, para el recorrido.
 
         Comparte las garantias del render: token, mismo origen y resolucion por
-        indice. En esta fase el recorrido muestra el fijo sin reproducir nada.
+        indice. El token tambien viaja como parametro para el atributo `poster`
+        del `<video>`, que no puede mandar encabezados.
         """
         server = self.server
 
-        if self.headers.get("X-Fotos-Plus-Token") != server.token:
+        if _media_token(self.headers, query) != server.token:
             self._send_json(403, {"error": "token invalido"})
             return
 
@@ -224,6 +334,92 @@ class _LabelHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(500, {"error": f"no se pudo leer el video: {error}"})
             return
         self._send_image(200, data)
+
+    def _send_video_file(self, path: Path, mime: str) -> None:
+        """Serve the original video file, honoring a single Range request.
+
+        Full responses answer 200; a satisfiable byte range answers 206; a range
+        past the end answers 416; multi-range requests are refused. The file is
+        streamed in chunks so multi-GB originals never sit fully in memory.
+        """
+        try:
+            size = path.stat().st_size
+        except OSError as error:
+            self._send_json(500, {"error": f"no se pudo leer el video: {error}"})
+            return
+        try:
+            bounds = _parse_single_range(self.headers.get("Range", ""), size)
+        except ValueError as error:
+            if "multiples" in str(error):
+                self._send_json(400, {"error": str(error)})
+            else:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            return
+        if bounds is None:
+            start, end = 0, size - 1
+            status = 200
+        else:
+            start, end = bounds
+            status = 206
+        length = end - start + 1
+        self.send_response(status)
+        self.send_header("Content-Type", mime)
+        self.send_header("Accept-Ranges", "bytes")
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Content-Length", str(length))
+        self.end_headers()
+        try:
+            with path.open("rb") as handle:
+                handle.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = handle.read(min(_VIDEO_CHUNK_BYTES, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (OSError, ValueError):
+            return
+
+    def _serve_video(self, query: dict[str, list[str]]) -> None:
+        """Sirve el archivo original de un video del indice, con rangos.
+
+        Comparte las garantias del render: token, mismo origen y resolucion por
+        indice. El token tambien viaja como parametro porque el `<video>` no
+        puede mandar encabezados. No hay transcodificacion: el navegador reproduce
+        el original y pide por rangos para poder saltar sin descargarlo entero.
+        """
+        server = self.server
+
+        if _media_token(self.headers, query) != server.token:
+            self._send_json(403, {"error": "token invalido"})
+            return
+
+        if _is_cross_origin(self.headers):
+            self._send_json(403, {"error": "peticion de otro origen rechazada"})
+            return
+
+        values = query.get("ref") or []
+        if len(values) != 1:
+            self._send_json(400, {"error": "falta la referencia del video"})
+            return
+
+        photo = server.photo_for(values[0])
+        if photo is None:
+            self._send_json(404, {"error": "la referencia no corresponde a ningun video"})
+            return
+
+        if photo.kind != "video":
+            self._send_json(400, {"error": "la referencia no es un video"})
+            return
+
+        source = server.root / photo.relative_path
+        mime = VIDEO_MIME_TYPES.get(photo.extension, "video/mp4")
+        self._send_video_file(source, mime)
 
     def _serve_photos(self, query: dict[str, list[str]]) -> None:
         """La lista de fotos de un grupo, para que el visor pueda recorrerlo.
@@ -527,6 +723,9 @@ class _LabelServer(http.server.HTTPServer):
 
     def render_path(self, sha256: str) -> Path:
         return render_path_for(renders_dir_next_to(self.index_path), sha256)
+
+    def thumb_path(self, sha256: str) -> Path:
+        return thumb_path_for(renders_dir_next_to(self.index_path), sha256)
 
     def poster_path(self, sha256: str) -> Path:
         return poster_path_for(renders_dir_next_to(self.index_path), sha256)

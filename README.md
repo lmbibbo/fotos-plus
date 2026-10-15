@@ -229,15 +229,22 @@ que ya estaba agrupado.
 
 #### Recorrer las fotos de un grupo
 
-Con el servidor arrancado, cada tarjeta que tiene fotos propias ofrece **Ver fotos**: abre un
-recorrido a pantalla completa con las fotos del grupo, una a una.
+Con el servidor arrancado, cada tarjeta que tiene fotos propias ofrece **Ver fotos**: abre una
+rejilla con una miniatura de cada foto y video del grupo, a la misma escala que las miniaturas
+de las tarjetas, para ver el grupo entero de un vistazo. Elegir una de esas miniaturas abre el
+recorrido a pantalla completa **en esa foto**, no en la primera.
 
-- Arriba se ve **en cuál de las fotos del grupo estás** (`3 de 120`).
+- Arriba del recorrido se ve **en cuál de las fotos del grupo estás** (`3 de 120`).
 - `Anterior` y `Siguiente`, o las **flechas del teclado**. En el primer y en el último foto el
   recorrido se queda quieto: no da la vuelta ni se sale del grupo.
 - Las flechas no interfieren con escribir: si estás con el cursor en un campo de texto, la
   flecha escribe en el campo.
-- `Escape` o `Cerrar` vuelven a las tarjetas. Cerrar no marca ni desmarca nada.
+- `Escape` o `Cerrar` vuelven a la rejilla que abrió el recorrido, y el botón `Volver` de la
+  rejilla, a las tarjetas. Cerrar no marca ni desmarca nada.
+
+Las miniaturas de la rejilla se piden al servidor una a una (con `loading="lazy"`), en el mismo
+tamaño de 200 píxeles que embebe el HTML exportado: un grupo de mil fotos no multiplica el peso
+de la página.
 
 Un grupo declarado por el escaneo que se quedó sin fotos propias no ofrece el botón: no hay
 nada que recorrer. El grupo de fotos sin clasificar **sí** se puede recorrer.
@@ -568,9 +575,11 @@ Cualquier otro archivo se ignora en silencio.
 - **EXIF no guarda zona horaria**: `captured_at` se guarda tal cual, sin ajuste.
 - **Un archivo con extensión de foto pero ilegible** no se registra como foto: aparece en
   `errors` y el escaneo sigue con el resto. Lo mismo vale para un video ilegible.
-- **Los videos no se reproducen en esta fase**: las tarjetas muestran un fotograma cuando
+- **Los videos se reproducen solo en modo servidor**: las tarjetas muestran un fotograma cuando
   hay un `ffmpeg` en el sistema y una ficha con la duración cuando no lo hay; el recorrido
-  muestra el fotograma fijo sin reproducir.
+  reproduce el original con los controles del navegador, sin transcodificar. Para poder
+  saltar sin descargar el archivo entero el servidor sirve por rangos; el exportado
+  estático sigue mostrando solo los fotogramas.
 - **Un directorio sin permiso de lectura** no corta el escaneo: se anota en `errors` y se
   continúa con los demás directorios.
 - El escaneo no es incremental: cada corrida vuelve a hashear todos los archivos.
