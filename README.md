@@ -29,12 +29,16 @@ La página ordena en **dos ejes distintos**:
 El orden de la página es siempre el mismo:
 
 1. Las secciones de los tags, por fecha de su primera tarjeta.
-2. La sección `Marcadas`.
-3. Una sección por cada cubo que tenga fotos, en el orden del catálogo.
+2. La tarjeta `Marcadas`.
+3. Una tarjeta por cada cubo que tenga fotos, en el orden del catálogo.
 
-Las fotos que no están en ningún cubo no aparecen en ninguna sección de fotos.
+Las fotos que no están en ningún cubo no aparecen en ninguna tarjeta de fotos.
 
-Las secciones de fotos usan miniaturas, no renders: es lo que permite que la página abra
+Las tarjetas de fotos se ven como las de grupo: título, cantidad, rango de fechas y hasta
+cinco miniaturas. En la página servida, `Ver fotos` abre el conjunto completo en la rejilla.
+El HTML exportado muestra las mismas tarjetas, sin controles.
+
+Las miniaturas van embebidas, no se piden renders: es lo que permite que la página abra
 rápido con una biblioteca grande.
 
 ## Estado
@@ -134,6 +138,8 @@ El servidor:
 - Levanta una copia de la página en memoria con los controles de edición. Al guardar un
   título, el de la tarjeta se actualiza sin recargar. Al cambiar un tag la página **se
   recarga**, porque las secciones se reordenan.
+- Cada tarjeta de `Marcadas` o de un cubo tiene `Ver fotos`; abre la rejilla con todo el
+  conjunto, en el mismo orden en que se recorren las fotos.
 - Muestra la dirección al arrancar. Ctrl+C lo cierra y libera el puerto.
 
 El token de sesión se genera en cada arranque y viaja en la página servida: sin él, los
@@ -221,8 +227,9 @@ Cómo se agrupa la página:
   su primera tarjeta. `Sin tag` va siempre al final.
 - **Arrastrá** una tarjeta a otra sección y adopta su tag. Soltala sobre `Sin tag` para quitarle
   el tag. Soltarla sobre otra tarjeta le toma el tag de esa tarjeta.
-- El HTML exportado con `view` (sin `--serve`) muestra las mismas secciones, pero sin selector
-  ni arrastre: no hay servidor donde guardar.
+- El HTML exportado con `view` (sin `--serve`) muestra las mismas tarjetas de grupo y de
+  fotos, pero sin selector ni arrastre: no hay servidor donde guardar. Las tarjetas de fotos
+  muestran hasta cinco miniaturas y no ofrecen `Ver fotos`.
 
 Los tags no cambian los rangos de fechas ni a qué fotos pertenece cada grupo. Solo ordenan lo
 que ya estaba agrupado.
@@ -589,10 +596,9 @@ Cualquier otro archivo se ignora en silencio.
 - **El visualizador no permite ver el original**: solo miniaturas de 200 px, sin pantalla
   completa, sin zoom y sin navegación por teclado. Agrandar la miniatura significa agrandar el
   HTML, así que el tamaño está fijo en esta etapa.
-- **Las secciones de fotos dibujan como mucho 300 fotos**: cada sección dibuja hasta 300 y el
-  encabezado dice cuántas tiene en total. Lo que queda afuera no se dibuja, y un aviso te dice cuántas
-  son y que las veas desde `Ver fotos` del grupo, que las lista todas sin agrandar el HTML. Para llegar a la foto 301 y siguientes
-  de un cubo grande hay que usar el recorrido.
+- **Las tarjetas de fotos muestran como mucho cinco miniaturas**: la tarjeta informa cuántas
+  fotos tiene el conjunto, pero no las embebe todas. En la página servida, `Ver fotos` abre la
+  rejilla completa; el HTML exportado se queda con la vista previa de cinco miniaturas.
 - **El visualizador se regenera entero en cada `view`**: no hay caché, así que abrirlo varias
   veces sobre el mismo índice vuelve a generar todas las miniaturas.
 

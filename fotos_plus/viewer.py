@@ -23,19 +23,6 @@ if TYPE_CHECKING:
 
 THUMBNAILS_PER_GROUP = 5
 
-# Cuantas fotos se dibujan de verdad dentro de una seccion de fotos sueltas.
-#
-# Es el mismo tipo de recorte que `THUMBNAILS_PER_GROUP`, pero del otro lado: una tarjeta
-# de grupo ya se recorta a 5 miniaturas, asi que su costo no crece con la biblioteca. Una
-# seccion de cubos no: cada foto es una miniatura embebida, asi que sin tope el tamano de la
-# pagina crece con la cantidad de fotos del cubo. Con el tope, una seccion no puede pasar
-# de ~4 MB y la pagina sigue abriendo; el encabezado dice cuantas hay en total.
-#
-# El caso que motiva el tope es un cubo con casi toda la biblioteca: sin el, una
-# seccion con 2000 fotos pasaba la pagina de 130 KB a 42 MB y el navegador se
-# colgaba antes de mostrar nada.
-PHOTOS_PER_SECTION = 300
-
 ORPHAN_TITLE = "Fotos sin clasificar"
 FLAT_GRID_TITLE = "Todas las fotos"
 
@@ -53,6 +40,10 @@ class Group:
 
     `tag` es el tag que el usuario le asigno. No cambia el contenido de la tarjeta ni su
     rango de fechas: solo decide en que seccion aparece.
+
+    `collection_key` es la referencia reservada de una tarjeta de fotos (marcadas o un
+    cubo). Esas tarjetas no son grupos, asi que no tienen `key` ni editor, pero si una
+    clave con la que el recorrido pide su lista.
     """
 
     title: str
@@ -64,22 +55,30 @@ class Group:
     photos: list[Photo] = field(default_factory=list)
     key: Optional[str] = None
     tag: Optional[str] = None
+    collection_key: Optional[str] = None
 
     @property
     def browse_key(self) -> str:
-        """La referencia con la que el visor pide la lista de fotos de este grupo.
+        """La referencia con la que el visor pide la lista de fotos de esta tarjeta.
 
         Casi todos los grupos ya traen su propia clave, pero el de las fotos sin
         clasificar no la tiene: el escaneo no declaro ningun viaje ni periodo del que
         sacarla. Ese grupo tambien se puede recorrer, asi que recibe una referencia
         reservada, que no choca con ninguna clave real porque las de los grupos
         sugeridos son marcas de tiempo.
+
+        Las tarjetas de fotos usan `collection_key` antes que cualquier clave de grupo:
+        no son grupos, pero el recorrido las pide con la misma referencia.
         """
+        if self.collection_key is not None:
+            return self.collection_key
         return self.key if self.key is not None else UNCLASSIFIED_GROUP_KEY
 
 
 UNTAGGED_SECTION_TITLE = "Sin tag"
 MARKED_SECTION_TITLE = "Marcadas"
+MARKED_COLLECTION_KEY = "marcadas"
+BUCKET_COLLECTION_PREFIX = "cubo:"
 TAG_CATALOG_ID = "tag-catalog"
 BUCKET_CATALOG_ID = "bucket-catalog"
 UNCLASSIFIED_GROUP_KEY = "sin-clasificar"
@@ -89,26 +88,15 @@ GROUP_GRID_ID = "group-grid"
 
 @dataclass
 class Section:
-    """Un conjunto de tarjetas que comparten tag, y el encabezado que las agrupa.
-
-    Las secciones de cubos usan la misma forma pero llevan fotos sueltas en vez de grupos:
-    un cubo nombra fotos, nohartes de viaje. Por eso las dos listas vienen con valor
-    por omision, y `count` cuenta lo que la seccion efectivamente tiene.
-    """
+    """Un conjunto de tarjetas que comparten tag, y el encabezado que las agrupa."""
 
     tag: Optional[str]
     title: str
     groups: list[Group] = field(default_factory=list)
-    photos: list[Photo] = field(default_factory=list)
 
     @property
     def count(self) -> int:
-        return len(self.groups) if self.groups else len(self.photos)
-
-    @property
-    def holds_photos(self) -> bool:
-        """Si la seccion lista fotos sueltas en lugar de tarjetas de grupo."""
-        return not self.groups and bool(self.photos)
+        return len(self.groups)
 
 
 def _section_date(section: Section) -> str:
@@ -446,7 +434,8 @@ def _group_card(
     # Se muestra la cantidad de fotos que tiene el grupo de verdad, no el `photo_count`
     # de la sugerencia: ese numero cuenta solo las fotos con posicion, asi que queda
     # muy por debajo del total y haria pensar que faltan fotos.
-    meta: list[str] = [f"{len(group.photos)} fotos"]
+    count = len(group.photos)
+    meta: list[str] = [f"{count} foto" if count == 1 else f"{count} fotos"]
     if group.first_captured_at and group.last_captured_at:
         start = group.first_captured_at[:10]
         end = group.last_captured_at[:10]
@@ -459,9 +448,14 @@ def _group_card(
 
     thumbs = "".join(_group_thumbs(group, root))
     if not thumbs:
-        # Grupo declarado que se quedo sin fotos, normalmente porque cae dentro de
-        # un viaje. Se avisa para que no parezca que falta el grupo.
-        thumbs = '<p class="vacio">Sin fotos propias: caen en otro grupo.</p>'
+        if group.collection_key is not None:
+            # Una tarjeta de fotos no es un grupo: sus fotos no pueden "caer en otro
+            # grupo". Si no hay miniaturas es porque no se pudieron preparar.
+            thumbs = '<p class="vacio">No se pudieron preparar las miniaturas.</p>'
+        else:
+            # Grupo declarado que se quedo sin fotos, normalmente porque cae dentro de
+            # un viaje. Se avisa para que no parezca que falta el grupo.
+            thumbs = '<p class="vacio">Sin fotos propias: caen en otro grupo.</p>'
     editor = (
         _label_editor(group, labels, token, tag_options) if token is not None else ""
     )
@@ -475,10 +469,16 @@ def _group_card(
             f' data-browse-key="{html.escape(group.browse_key)}">Ver fotos</button>'
         )
     # El tag viaja en la tarjeta para que el arrastre pueda leer el destino sin
-    # preguntar al servidor. Vacio significa que el grupo no tiene tag.
-    tag_attribute = f' data-tag="{html.escape(group.tag)}"' if group.tag else ' data-tag=""'
+    # preguntar al servidor. Vacio significa que el grupo no tiene tag. Las tarjetas de
+    # fotos no son grupos, asi que no llevan tag ni se enganchan al arrastre.
+    tag_attribute = ""
+    if group.key is not None:
+        tag_attribute = (
+            f' data-tag="{html.escape(group.tag)}"' if group.tag else ' data-tag=""'
+        )
+    card_class = "card photo-card" if group.collection_key is not None else "card"
     return (
-        f'<article class="card"{key_attribute}{tag_attribute}>'
+        f'<article class="{card_class}"{key_attribute}{tag_attribute}>'
         f'<h2>{html.escape(group.title)}</h2>'
         f'<p class="meta">{html.escape(" · ".join(meta))}</p>'
         f"{browse}"
@@ -558,41 +558,12 @@ def _section_html(
     token: Optional[str] = None,
     tag_options: Sequence[str] = (),
 ) -> str:
-    """Una seccion de tarjetas o de fotos.
+    """Una seccion de tarjetas de grupo.
 
     El encabezado de las secciones de grupo es tambien zona de destino: soltar una tarjeta
     ahi le asigna el tag de la seccion. La de "Sin tag" lleva el atributo vacio, que es lo
     que hace que soltar ahi le quite el tag en lugar de asignarle una cadena vacia.
-
-    Las secciones de fotos sueltas no llevan `data-drop` a proposito: no se puede arrastrar
-    un grupo de viaje a un cubo, porque un cubo nombra fotos y no tarjetas. Sin el atributo,
-    soltar ahi no encuentra destino y no se guarda nada.
     """
-    if section.holds_photos:
-        # El encabezado cuenta las fotos que tiene la seccion, no las que se dibujan: si
-        # hay mas que el tope, el aviso dice cuantas se quedaron afuera.
-        visibles = section.photos[:PHOTOS_PER_SECTION]
-        cards = "".join(_flat_card(photo, root) for photo in visibles)
-        plural = "foto" if section.count == 1 else "fotos"
-        if len(visibles) < section.count:
-            restantes = section.count - len(visibles)
-            plural_resto = "foto" if restantes == 1 else "fotos"
-            aviso = (
-                f'<p class="vacio">Se muestran {len(visibles)} de {section.count}. '
-                f"Las otras {restantes} {plural_resto} no se dibujan para que la pagina "
-                "no se vuelva interminable: usá el recorrido del grupo para verlas.</p>"
-            )
-        else:
-            aviso = ""
-        return (
-            f'<section class="photo-section">'
-            f'<h2 class="tag-section-title">{html.escape(section.title)}'
-            f'<span class="tag-section-count">{section.count} {plural}</span></h2>'
-            f'<div class="grid">{cards}</div>'
-            f"{aviso}"
-            "</section>"
-        )
-
     drop = html.escape(section.tag or "")
     cards = "".join(
         _group_card(group, root, labels, token, tag_options) for group in section.groups
@@ -605,6 +576,27 @@ def _section_html(
         f'<div class="grid">{cards}</div>'
         "</section>"
     )
+
+
+def _photo_cards_html(
+    cards: Sequence[Group],
+    root: Path,
+    labels: dict[str, str],
+    token: Optional[str] = None,
+    tag_options: Sequence[str] = (),
+) -> str:
+    """La grilla de tarjetas de fotos, despues de las tarjetas de grupo.
+
+    Las tarjetas de fotos no son grupos y no llevan encabezado de seccion: el titulo de
+    cada tarjeta ya nombra el conjunto. El contenedor conserva `photo-section` para que
+    soltar una tarjeta de grupo ahi se rechace con el mismo aviso de siempre.
+    """
+    if not cards:
+        return ""
+    cards_html = "".join(
+        _group_card(card, root, labels, token, tag_options) for card in cards
+    )
+    return f'<section class="photo-section"><div class="grid">{cards_html}</div></section>'
 
 
 def _flat_card(photo: Photo, root: Path) -> str:
@@ -645,6 +637,9 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .video-tile { display: flex; align-items: center; justify-content: center;
          min-height: 36px; background: #2c3036; border-radius: 4px;
          color: #9aa0a6; font-size: 10px; }
+.thumb-tile { display: flex; align-items: center; justify-content: center;
+         min-height: 36px; background: #2c3036; border-radius: 4px;
+         color: #9aa0a6; font-size: 10px; }
 .label-form { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; }
 .label-input { flex: 1 1 140px; min-width: 0; font: inherit; font-size: 12px;
                padding: 5px 8px; border-radius: 6px; border: 1px solid #3c4149;
@@ -657,6 +652,7 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .label-error { flex: 1 0 100%; color: #e0b4b4; font-size: 12px; margin: 2px 0 0; }
 .aviso { color: #d8c69a; font-size: 13px; margin: 0 0 12px; }
 .tag-section { margin: 0 0 28px; border-radius: 10px; }
+.photo-section { margin: 0 0 28px; }
 .tag-section-title { font-size: 14px; margin: 0 0 10px; color: #c8ccd2;
                      display: flex; align-items: baseline; gap: 8px; }
 .tag-section-count { font-size: 12px; color: #9aa0a6; font-weight: normal; }
@@ -883,7 +879,9 @@ EDIT_SCRIPT = """
     });
   }
 
-  document.querySelectorAll(".card").forEach(function (card) {
+  // Solo las tarjetas de grupo tienen `data-key`: las de fotos no son grupos, no se
+  // pueden etiquetar y no deben iniciar ni recibir un arrastre.
+  document.querySelectorAll(".card[data-key]").forEach(function (card) {
     card.setAttribute("draggable", "true");
 
     card.addEventListener("dragstart", function (evento) {
@@ -955,7 +953,7 @@ EDIT_SCRIPT = """
       evento.preventDefault();
       arrastrando = null;
       limpiarDestinos();
-      avisarDestino(seccion, "Los cubos nombran fotos, no viajes: arrastrá la foto desde el recorrido.");
+      avisarDestino(seccion, "Las marcas y los cubos nombran fotos, no viajes: arrastrá la foto desde el recorrido.");
     });
   });
 
@@ -1262,15 +1260,15 @@ EDIT_SCRIPT = """
         img.loading = "lazy";
         img.src = urlMedio(esVideo ? "/poster" : "/thumb", foto.ref);
         img.alt = foto.ref;
-        if (esVideo) {
-          // Sin decodificador el fijo no existe: la ficha con duracion ocupa su lugar.
-          img.addEventListener("error", function () {
-            var ficha = document.createElement("span");
-            ficha.className = "video-tile";
-            ficha.textContent = fichaVideo(foto);
-            if (img.parentNode === boton) { boton.replaceChild(ficha, img); }
-          });
-        }
+        // Una miniatura que no se puede servir no puede quedar como imagen rota: se
+        // reemplaza por una ficha. El video sin decodificador ya caia en su ficha con
+        // duracion; una foto ilegible cae en una ficha neutra.
+        img.addEventListener("error", function () {
+          var ficha = document.createElement("span");
+          ficha.className = esVideo ? "video-tile" : "thumb-tile";
+          ficha.textContent = esVideo ? fichaVideo(foto) : "Sin miniatura";
+          if (img.parentNode === boton) { boton.replaceChild(ficha, img); }
+        });
         boton.appendChild(img);
         boton.addEventListener("click", function () { abrir(claveActual, i); });
         rejillaCeldas.appendChild(boton);
@@ -1408,40 +1406,66 @@ EDIT_SCRIPT = """
 """
 
 
-def photo_sections(
+def bucket_collection_key(name: str) -> str:
+    """La referencia reservada de la tarjeta de un cubo."""
+    return f"{BUCKET_COLLECTION_PREFIX}{name}"
+
+
+def _photo_set_card(
+    title: str, kind: str, photos: list[Photo], collection_key: str
+) -> Group:
+    """Una tarjeta de fotos con la misma forma que la de un grupo.
+
+    `key` queda vacio a proposito: una tarjeta de fotos no es un grupo y no se puede
+    etiquetar. La referencia para abrir su recorrido viaja en `collection_key`.
+    """
+    fechas = [photo.captured_at for photo in photos if photo.captured_at]
+    return Group(
+        title=title,
+        kind=kind,
+        photo_count=len(photos),
+        first_captured_at=min(fechas) if fechas else None,
+        last_captured_at=max(fechas) if fechas else None,
+        photos=photos,
+        collection_key=collection_key,
+    )
+
+
+def photo_cards(
     photos: Iterable[Photo],
     marked: Iterable[str] = (),
     photo_tags: Sequence[str] = (),
     photo_tagged: Optional[Mapping[str, Sequence[str]]] = None,
-) -> list[Section]:
-    """Las secciones de fotos sueltas: las marcadas y las de cada cubo.
+) -> list[Group]:
+    """Las tarjetas de fotos: las marcadas y las de cada cubo.
 
     El orden es fijo y no depende de las fechas, porque estos nombres los escribio la
     persona y no los coloco una agrupacion automatica: primero las marcadas, despues los
     cubos en el orden en que estan guardados. Las fotos que no estan en ningun cubo no
-    aparecen en ninguna seccion de fotos.
+    aparecen en ninguna tarjeta de fotos.
 
-    Un nombre del catalogo que no tiene ninguna foto no produce seccion: la vacia no le
+    Un nombre del catalogo que no tiene ninguna foto no produce tarjeta: la vacia no le
     aporta nada a quien esta mirando. Una foto que esta en varios cubos aparece en cada
     uno, porque de eso se trata.
     """
     marcas = frozenset(marked)
     buckets = photo_tagged or {}
     # El indice manda sobre el archivo: una pertenencia a una foto que ya no existe no
-    # llega a la seccion, aunque el nombre siga en el archivo.
+    # llega a la tarjeta, aunque el nombre siga en el archivo.
     presentes = {photo.sha256: photo for photo in photos}
 
-    sections: list[Section] = []
+    cards: list[Group] = []
 
     marcadas = [
         presentes[sha256] for sha256 in marcas if sha256 in presentes
     ]
     if marcadas:
-        sections.append(
-            Section(
-                tag=None,
-                title=MARKED_SECTION_TITLE,
-                photos=sorted(marcadas, key=_photo_sort_key),
+        cards.append(
+            _photo_set_card(
+                MARKED_SECTION_TITLE,
+                "marked",
+                sorted(marcadas, key=_photo_sort_key),
+                MARKED_COLLECTION_KEY,
             )
         )
 
@@ -1452,15 +1476,16 @@ def photo_sections(
             if sha256 in presentes and nombre in buckets[sha256]
         ]
         if en_este:
-            sections.append(
-                Section(
-                    tag=None,
-                    title=nombre,
-                    photos=sorted(en_este, key=_photo_sort_key),
+            cards.append(
+                _photo_set_card(
+                    nombre,
+                    "bucket",
+                    sorted(en_este, key=_photo_sort_key),
+                    bucket_collection_key(nombre),
                 )
             )
 
-    return sections
+    return cards
 
 
 def _drift_notice(drift: Optional["LabelResolution"]) -> str:
@@ -1501,17 +1526,18 @@ def render_html(
 
     `tag_options` son los nombres del catalogo que el selector de tag ofrece.
 
-    `marked` son los hashes de las fotos marcadas. Solo se usa cuando hay token: sin
-    servidor el HTML exportado no lleva el inventario ni las marcas.
+    `marked` son los hashes de las fotos marcadas. Se usan para pintar la tarjeta de
+    marcadas tanto en la pagina servida como en el export; sin servidor lo que no viaja
+    es el inventario del payload.
 
     `photo_tags` y `photo_tagged` son el catalogo de cubos y la pertenencia de cada foto.
-    Tambien solo se usan cuando hay token, por la misma razon que las marcas.
+    Tambien se usan para pintar las tarjetas en los dos casos, por la misma razon.
     """
     labels = labels or {}
     editable = token is not None
 
-    # Lo que se muestra y lo que se embebido son dos cosas. El HTML exportado tambiem
-    # muestra las secciones de marcadas y de cubos, asi que las marcas y la pertenencia
+    # Lo que se muestra y lo que se embebe son dos cosas. El HTML exportado tambien
+    # muestra las tarjetas de marcadas y de cubos, asi que las marcas y la pertenencia
     # se usan para pintar en los dos casos; lo que no viaja en el export es el inventario
     # del payload, porque sin servidor no hay quien lo use. Por eso la inclusion va aparte
     # de `editable`.
@@ -1531,20 +1557,14 @@ def render_html(
         # Con tags asignados las tarjetas van en secciones; sin tags, en una sola
         # grilla ordenada por fecha, que es como se veia antes de que existieran.
         sections = group_sections(groups)
-        # Las secciones de fotos van despues de las de grupo: primero se ordena el viaje
-        # y despues se repasa foto por foto lo que quedo apuntado. Si no hay nada de
-        # ninguna de las dos, el documento queda como estaba, en una sola grilla.
-        secciones_fotos = (
-            photo_sections(
-                (photo for group in groups for photo in group.photos),
-                marked or (),
-                photo_tags,
-                photo_tagged,
-            )
-            # Sin marcas ni cubos no hay nada que repasar foto por foto: la pagina queda
-            # como estaba, con las tarjetas de grupo en su grilla de siempre.
-            if marked or photo_tags or photo_tagged
-            else []
+        # Las tarjetas de fotos van despues de las de grupo: primero se ordena el viaje
+        # y despues se repasa foto por foto lo que quedo apuntado. No llevan encabezado
+        # de seccion: cada tarjeta ya nombra su conjunto.
+        tarjetas_fotos = photo_cards(
+            (photo for group in groups for photo in group.photos),
+            marked or (),
+            photo_tags,
+            photo_tagged,
         )
         # Las tarjetas de grupo van en secciones si hay tags y en una sola grilla si no
         # los hay. Las de fotos se suman despues en cualquier caso: son un repaso aparte
@@ -1560,9 +1580,8 @@ def render_html(
                 for group in groups
             )
             tarjetas = f'<div class="grid">{cards}</div>'
-        body = tarjetas + "".join(
-            _section_html(section, Path(root), labels, token, tag_options)
-            for section in secciones_fotos
+        body = tarjetas + _photo_cards_html(
+            tarjetas_fotos, Path(root), labels, token, tag_options
         )
         title = "Viajes y periodos sugeridos"
         subtitle = "sugerencias sin confirmar: no son definitivas"
@@ -1668,14 +1687,41 @@ def _payload(
     return payload
 
 
+class LibraryRootError(ValueError):
+    """La carpeta de fotos no se puede determinar."""
+
+
+def resolve_library_root(
+    index_root: str, suggestions_root: Optional[str] = None
+) -> Path:
+    """La carpeta de fotos: la del indice si existe, si no la de sugerencias.
+
+    El indice guarda la carpeta que se escaneo, pero ese dato puede quedar inservible
+    (una ruta vacia o un disco desconectado). El archivo de sugerencias hermano guarda la
+    misma carpeta, asi que sirve de respaldo cuando la del indice no esta. Si ninguna de
+    las dos existe se informa, en vez de generar una pagina con las miniaturas vacias.
+    """
+    candidate = Path(index_root)
+    if candidate.is_dir():
+        return candidate
+    if suggestions_root:
+        fallback = Path(suggestions_root)
+        if fallback.is_dir():
+            return fallback
+    raise LibraryRootError(
+        f"no se encontro la carpeta de fotos: {index_root!r} "
+        f"ni {suggestions_root!r}"
+    )
+
+
 def build_view(index_path: Path) -> tuple[str, bool]:
     """Devuelve el HTML del visor y si se genero en modo grid plano."""
     index_path = Path(index_path)
     result = read_index(index_path)
-    root = result.root
 
     suggestions_path = suggestions_path_next_to(index_path)
     if not suggestions_path.is_file():
+        root = resolve_library_root(result.root)
         groups = [
             Group(
                 title=FLAT_GRID_TITLE,
@@ -1686,9 +1732,10 @@ def build_view(index_path: Path) -> tuple[str, bool]:
                 photos=list(result.photos),
             )
         ]
-        return render_html(groups, root, flat=True), True
+        return render_html(groups, str(root), flat=True), True
 
     suggestions = read_suggestions(suggestions_path)
+    root = resolve_library_root(result.root, suggestions.root)
 
     # El archivo de edicion se lee para pintar los titulos, pero el HTML exportado
     # sigue siendo de solo lectura: se genera sin token, asi que no trae controles ni
@@ -1705,7 +1752,7 @@ def build_view(index_path: Path) -> tuple[str, bool]:
     return (
         render_html(
             groups,
-            root,
+            str(root),
             flat=False,
             labels=resolution.labels,
             token=None,
