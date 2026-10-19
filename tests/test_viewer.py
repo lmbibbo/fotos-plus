@@ -2407,6 +2407,45 @@ def test_the_browser_plays_videos_with_native_controls(tmp_path: Path) -> None:
     assert "duration_s" in EDIT_SCRIPT
     assert "soltarVideo" in EDIT_SCRIPT
     assert "video.pause()" in EDIT_SCRIPT
+    # The video branch attempts playback after the source, and the handler swallows
+    # every rejection: a refusal leaves the poster still, an interrupted attempt is
+    # already handled by navigation.
+    assert re.search(
+        r'video\.src = "/video" \+ medio;.*?video\.play\(\)\.catch\(function \(\) \{\}\);',
+        EDIT_SCRIPT,
+        re.DOTALL,
+    )
+    assert "Videos show a still without playback" not in EDIT_SCRIPT
+
+
+def test_arriving_at_a_video_plays_it_and_leaving_still_stops_it_first(
+    tmp_path: Path,
+) -> None:
+    from fotos_plus.viewer import EDIT_SCRIPT
+
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg", "b.jpg"])
+
+    document = _browser_html(root, ["a.jpg", "b.jpg"])
+
+    mostrar = re.search(
+        r"function mostrar\(indiceNuevo\) \{(.*?)\n    \}", document, re.DOTALL
+    )
+    assert mostrar is not None
+    cuerpo = mostrar.group(1)
+    assert cuerpo.index("soltarVideo();") < cuerpo.index('video.src = "/video" + medio;')
+    assert cuerpo.index('video.src = "/video" + medio;') < cuerpo.index("video.play()")
+
+    soltar = re.search(r"function soltarVideo\(\) \{(.*?)\n    \}", document, re.DOTALL)
+    assert soltar is not None
+    cuerpo_soltar = soltar.group(1)
+    assert cuerpo_soltar.index("video.pause();") < cuerpo_soltar.index(
+        'video.removeAttribute("src");'
+    )
+    assert cuerpo_soltar.index("video.pause();") < cuerpo_soltar.index(
+        'video.removeAttribute("poster");'
+    )
+    assert "video.play()" in EDIT_SCRIPT
 
 
 def test_the_export_embeds_video_posters_and_no_blobs(tmp_path: Path, monkeypatch) -> None:

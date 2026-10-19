@@ -577,9 +577,12 @@ Cualquier otro archivo se ignora en silencio.
   `errors` y el escaneo sigue con el resto. Lo mismo vale para un video ilegible.
 - **Los videos se reproducen solo en modo servidor**: las tarjetas muestran un fotograma cuando
   hay un `ffmpeg` en el sistema y una ficha con la duración cuando no lo hay; el recorrido
-  reproduce el original con los controles del navegador, sin transcodificar. Para poder
-  saltar sin descargar el archivo entero el servidor sirve por rangos; el exportado
-  estático sigue mostrando solo los fotogramas.
+  reproduce el original con los controles del navegador, sin transcodificar, y arranca la
+  reproducción al llegar a un video, tanto al abrirlo desde la rejilla como al pasar a él con
+  las flechas o los botones. Si el navegador rechaza la reproducción automática, queda el
+  fotograma con los controles nativos y no se informa ningún error. Para poder saltar sin
+  descargar el archivo entero el servidor sirve por rangos; el exportado estático sigue
+  mostrando solo los fotogramas.
 - **Un directorio sin permiso de lectura** no corta el escaneo: se anota en `errors` y se
   continúa con los demás directorios.
 - El escaneo no es incremental: cada corrida vuelve a hashear todos los archivos.

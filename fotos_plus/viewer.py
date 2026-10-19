@@ -1160,8 +1160,9 @@ EDIT_SCRIPT = """
       // It is sliced to the date only; the served value keeps the full timestamp.
       // An undated photo leaves the line exactly as it was, with no placeholder.
       var fecha = foto.captured_at ? foto.captured_at.slice(0, 10) : "";
-      // Videos show a still without playback in this phase: the poster endpoint
-      // serves the fixed frame, and the duration rides next to the position.
+      // Videos play on arrival: the poster endpoint serves the pre-playback frame, and
+      // the duration rides next to the position. If the browser refuses playback, the
+      // poster still stays with the native controls.
       var esVideo = foto.kind === "video";
       var duracion = "";
       if (esVideo && typeof foto.duration_s === "number" && foto.duration_s >= 0) {
@@ -1187,6 +1188,10 @@ EDIT_SCRIPT = """
         video.hidden = false;
         video.poster = "/poster" + medio;
         video.src = "/video" + medio;
+        // Attempt playback after the source is set. Any rejection is swallowed: a
+        // policy refusal leaves the poster still, and an attempt interrupted by
+        // navigation is already handled by soltarVideo().
+        video.play().catch(function () {});
         return;
       }
       var rutaFoto = "/render?ref=" + encodeURIComponent(foto.ref);
