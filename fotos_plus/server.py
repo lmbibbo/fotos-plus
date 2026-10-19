@@ -39,6 +39,8 @@ from .labels import (
 from .index import read_index, read_suggestions
 from .photos import PhotoError, cached_poster, cached_render, cached_thumb
 from .viewer import _photo_sort_key, assign_groups, render_html
+from .viewer import LibraryRootError, resolve_library_root
+from .viewer import photo_cards as build_photo_cards
 
 
 class EditServerError(Exception):
@@ -670,6 +672,7 @@ class _LabelServer(http.server.HTTPServer):
         suggestions,
         edicion_path: Path,
         overlay: LabelOverlay,
+        root: Path,
         dev: bool = False,
     ) -> None:
         super().__init__(server_address, handler_class)
@@ -680,16 +683,24 @@ class _LabelServer(http.server.HTTPServer):
         self.scanned_at = suggestions.scanned_at
         self.edicion_path = Path(edicion_path)
         self.overlay = overlay
+        self._library_root = Path(root)
         self._page_cache: Optional[bytes] = None
         self._index_result = None
         self._photo_map: Optional[dict] = None
         self._resolution = None
         self._groups = None
+        self._photo_cards = None
         self._group_map: Optional[dict] = None
 
     @property
     def root(self) -> Path:
-        return Path(self.index().root)
+        """La carpeta de fotos resuelta al arrancar.
+
+        Puede no ser la que declara el indice: si esa no esta, se uso la del archivo de
+        sugerencias. La pagina y los endpoints de medios leen la misma, asi que no pueden
+        discrepar sobre donde estan las fotos.
+        """
+        return self._library_root
 
     def index(self):
         """El indice, leido una sola vez mientras el servidor vive.
@@ -748,17 +759,37 @@ class _LabelServer(http.server.HTTPServer):
             )
         return self._resolution, self._groups
 
+    def photo_cards(self):
+        """Las tarjetas de marcadas y cubos, calculadas una sola vez por sesion.
+
+        La pagina las dibuja y el endpoint de fotos las recorre con la misma cuenta. Si
+        cada uno las armara por su lado, una tarjeta podria abrir un conjunto distinto
+        del que muestra.
+        """
+        if self._photo_cards is None:
+            _, groups = self.resolve()
+            self._photo_cards = build_photo_cards(
+                (photo for group in groups for photo in group.photos),
+                self.overlay.marked,
+                self.overlay.photo_tags,
+                self.overlay.photo_tagged,
+            )
+        return self._photo_cards
+
     def group_for(self, reference: str):
-        """El grupo que esa referencia nombra, o None si no hay uno solo.
+        """La tarjeta que esa referencia nombra, o None si no hay una sola.
 
         Dos grupos con la misma referencia no se distinguen, asi que no se elige uno
         cualquiera: se informa, porque un grupo mostrado por error seria peor que uno
-        que no se pueda abrir.
+        que no se pueda abrir. Las tarjetas de fotos usan referencias reservadas y se
+        resuelven con la misma regla.
         """
         if self._group_map is None:
             grouped: dict = {}
             for group in self.resolve()[1]:
                 grouped.setdefault(group.browse_key, []).append(group)
+            for card in self.photo_cards():
+                grouped.setdefault(card.browse_key, []).append(card)
             self._group_map = {
                 key: (members[0] if len(members) == 1 else None)
                 for key, members in grouped.items()
@@ -770,17 +801,18 @@ class _LabelServer(http.server.HTTPServer):
         self._page_cache = None
         self._resolution = None
         self._groups = None
+        self._photo_cards = None
         self._group_map = None
 
     def build_page(self) -> bytes:
         if self._page_cache is not None and not self.dev:
             return self._page_cache
 
-        result = self.index()
+        self.index()
         resolution, groups = self.resolve()
         html = render_html(
             groups,
-            result.root,
+            str(self.root),
             flat=False,
             labels=resolution.labels,
             token=self.token,
@@ -838,6 +870,13 @@ def start_edit_server(
     edicion_path = edicion_path_next_to(index_path)
     overlay = read_edicion(edicion_path)
 
+    # La carpeta se resuelve una sola vez, antes de escuchar: si no se puede, el
+    # arranque falla con el motivo en vez de servir una pagina sin miniaturas.
+    try:
+        root = resolve_library_root(read_index(index_path).root, suggestions.root)
+    except LibraryRootError as error:
+        raise EditServerError(str(error)) from error
+
     if port is not None:
         # Se comprueba antes de construir el servidor para que un puerto ocupado
         # falle sin dejar un servidor a medio hacer.
@@ -861,6 +900,7 @@ def start_edit_server(
         suggestions,
         edicion_path,
         overlay,
+        root,
         dev=dev,
     )
     return server, port, token

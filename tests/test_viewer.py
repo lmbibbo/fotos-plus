@@ -1579,8 +1579,24 @@ def test_a_video_cell_falls_back_to_the_duration_tile(tmp_path: Path) -> None:
 
     document = _browser_html(root, ["a.jpg"])
 
-    assert 'ficha.className = "video-tile";' in document
+    assert 'ficha.className = esVideo ? "video-tile" : "thumb-tile";' in document
+    assert 'ficha.textContent = esVideo ? fichaVideo(foto) : "Sin miniatura";' in document
     assert "boton.replaceChild(ficha, img)" in document
+
+
+def test_a_photo_cell_falls_back_to_a_placeholder(tmp_path: Path) -> None:
+    """Una miniatura que el servidor no puede servir no queda como imagen rota."""
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+
+    document = _browser_html(root, ["a.jpg"])
+
+    # El manejador de error ya no esta atado solo al video: tambien cubre la foto.
+    assert 'var esVideo = foto.kind === "video";' in document
+    assert 'img.addEventListener("error", function () {' in document
+    assert '"thumb-tile"' in document
+    assert '"Sin miniatura"' in document
+    assert ".thumb-tile" in document
 
 
 def test_clicking_a_cell_opens_the_browser_at_that_index(tmp_path: Path) -> None:
@@ -1622,162 +1638,7 @@ def test_the_export_has_no_grid(tmp_path: Path) -> None:
     assert "/poster" not in document
 
 
-# --- 6.1 y 6.2 la forma de seccion y su construccion ---------------------------
-
-
-def test_a_section_with_photos_is_not_a_section_with_groups() -> None:
-    from fotos_plus.viewer import Section
-
-    fotos = [photo("a.jpg", "2024-01-01T10:00:00")]
-
-    seccion = Section(tag=None, title="Favoritas", photos=fotos)
-
-    assert seccion.holds_photos is True
-    assert seccion.count == 1
-    assert seccion.groups == []
-
-
-def test_a_group_section_keeps_counting_groups() -> None:
-    from fotos_plus.viewer import Section
-
-    grupos = [
-        assign_groups(
-            [photo("a.jpg", "2024-01-01T10:00:00")],
-            suggestions(trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")]),
-        )[0]
-    ]
-
-    seccion = Section(tag="Viaje", title="Viaje", groups=grupos)
-
-    assert seccion.holds_photos is False
-    assert seccion.count == 1
-
-
-def test_the_photo_sections_come_out_marked_then_buckets() -> None:
-    from fotos_plus.viewer import MARKED_SECTION_TITLE, photo_sections
-
-    a = photo("a.jpg", "2024-01-01T10:00:00")
-    b = photo("b.jpg", "2024-06-01T10:00:00")
-    c = photo("c.jpg", "2024-09-01T10:00:00")
-
-    sections = photo_sections(
-        [a, b, c],
-        marked=["b.jpg"],
-        photo_tags=["Favoritas", "Para imprimir"],
-        photo_tagged={"a.jpg": ["Favoritas"], "b.jpg": ["Para imprimir"]},
-    )
-
-    assert [section.title for section in sections] == [
-        MARKED_SECTION_TITLE,
-        "Favoritas",
-        "Para imprimir",
-    ]
-
-
-def test_the_bucket_sections_follow_the_catalogue_order_not_the_date_order() -> None:
-    from fotos_plus.viewer import photo_sections
-
-    a = photo("a.jpg", "2024-01-01T10:00:00")
-    b = photo("b.jpg", "2024-06-01T10:00:00")
-
-    sections = photo_sections(
-        [a, b],
-        photo_tags=["Zeta", "Alfa"],
-        photo_tagged={"a.jpg": ["Alfa"], "b.jpg": ["Zeta"]},
-    )
-
-    # El orden es el del catalogo, no el de la fecha de cada foto.
-    assert [section.title for section in sections] == ["Zeta", "Alfa"]
-
-
-def test_a_catalogue_name_holding_no_photo_gets_no_section() -> None:
-    from fotos_plus.viewer import photo_sections
-
-    a = photo("a.jpg", "2024-01-01T10:00:00")
-
-    sections = photo_sections(
-        [a], photo_tags=["Favoritas", "Vacio"], photo_tagged={"a.jpg": ["Favoritas"]}
-    )
-
-    assert [section.title for section in sections] == ["Favoritas"]
-
-
-def test_a_photo_in_several_buckets_is_listed_under_each_of_them() -> None:
-    from fotos_plus.viewer import photo_sections
-
-    a = photo("a.jpg", "2024-01-01T10:00:00")
-
-    sections = photo_sections(
-        [a],
-        photo_tags=["Favoritas", "Para imprimir"],
-        photo_tagged={"a.jpg": ["Favoritas", "Para imprimir"]},
-    )
-
-    assert [section.title for section in sections] == ["Favoritas", "Para imprimir"]
-    assert all([a] == section.photos for section in sections)
-
-
-def test_a_marked_photo_is_only_in_the_marked_section_when_it_holds_no_bucket() -> None:
-    from fotos_plus.viewer import photo_sections
-
-    a = photo("a.jpg", "2024-01-01T10:00:00")
-
-    sections = photo_sections([a], marked=[a.sha256])
-
-    assert len(sections) == 1
-    assert sections[0].photos == [a]
-
-
-def test_no_photo_at_all_gets_no_photo_section() -> None:
-    from fotos_plus.viewer import photo_sections
-
-    assert photo_sections([], marked=["a.jpg"], photo_tags=["Favoritas"]) == []
-
-
-def test_an_undated_photo_is_still_listed_and_follows_browse_order() -> None:
-    from fotos_plus.viewer import _photo_sort_key, photo_sections
-
-    con_fecha = photo("a.jpg", "2024-01-01T10:00:00")
-    sin_fecha = photo("b.jpg", None)
-
-    sections = photo_sections(
-        [sin_fecha, con_fecha],
-        photo_tags=["Favoritas"],
-        photo_tagged={"a.jpg": ["Favoritas"], "b.jpg": ["Favoritas"]},
-    )
-
-    # No se descarta por no tener fecha: aparece, y en el mismo orden que el recorrido.
-    assert sections[0].photos == [sin_fecha, con_fecha]
-    assert sections[0].photos == sorted(
-        [sin_fecha, con_fecha], key=_photo_sort_key
-    )
-
-
-def test_an_undated_photo_gets_no_section_when_no_bucket_membership_exists() -> None:
-    from fotos_plus.viewer import photo_sections
-
-    sin_fecha = photo("b.jpg", None)
-
-    sections = photo_sections([sin_fecha], photo_tags=["Favoritas"])
-
-    assert sections == []
-
-
-def test_photos_within_a_section_follow_browse_order() -> None:
-    from fotos_plus.viewer import photo_sections
-
-    b = photo("b.jpg", "2024-06-01T10:00:00")
-    a = photo("a.jpg", "2024-01-01T10:00:00")
-
-    sections = photo_sections([b, a], photo_tags=["Favoritas"], photo_tagged={
-        "a.jpg": ["Favoritas"],
-        "b.jpg": ["Favoritas"],
-    })
-
-    assert [p.name for p in sections[0].photos] == ["a.jpg", "b.jpg"]
-
-
-# --- 6.3 a 6.6 el marcado de las secciones de fotos ----------------------------
+# --- 6.1 y 6.2 tarjetas de fotos ----------------------------------------------
 
 
 def _sections_html(tmp_path: Path, **kwargs) -> str:
@@ -1797,67 +1658,299 @@ def _sections_html(tmp_path: Path, **kwargs) -> str:
     return render_html(groups, str(root), token="t0ken", **kwargs)
 
 
-def test_a_section_photo_renders_as_a_photo_not_as_a_group_card(tmp_path: Path) -> None:
+def _photo_card(document: str, title: str) -> str:
+    """El articulo de la tarjeta de fotos con ese titulo."""
+    heading = f"<h2>{title}</h2>"
+    start = document.index(heading)
+    start = document.rfind('<article class="card photo-card"', 0, start)
+    end = document.index("</article>", start)
+    return document[start:end]
+
+
+def test_photo_cards_come_out_marked_then_buckets() -> None:
+    from fotos_plus.viewer import (
+        MARKED_COLLECTION_KEY,
+        MARKED_SECTION_TITLE,
+        bucket_collection_key,
+        photo_cards,
+    )
+
+    a = photo("a.jpg", "2024-01-01T10:00:00")
+    b = photo("b.jpg", "2024-06-01T10:00:00")
+    c = photo("c.jpg", "2024-09-01T10:00:00")
+
+    cards = photo_cards(
+        [a, b, c],
+        marked=[b.sha256],
+        photo_tags=["Favoritas", "Para imprimir"],
+        photo_tagged={a.sha256: ["Favoritas"], b.sha256: ["Para imprimir"]},
+    )
+
+    assert [card.title for card in cards] == [
+        MARKED_SECTION_TITLE,
+        "Favoritas",
+        "Para imprimir",
+    ]
+    assert cards[0].collection_key == MARKED_COLLECTION_KEY
+    assert cards[1].browse_key == bucket_collection_key("Favoritas")
+    assert cards[0].key is None
+    assert cards[0].country is None
+
+
+def test_bucket_cards_follow_the_catalogue_order_not_the_date_order() -> None:
+    from fotos_plus.viewer import photo_cards
+
+    a = photo("a.jpg", "2024-01-01T10:00:00")
+    b = photo("b.jpg", "2024-06-01T10:00:00")
+
+    cards = photo_cards(
+        [a, b],
+        photo_tags=["Zeta", "Alfa"],
+        photo_tagged={"a.jpg": ["Alfa"], "b.jpg": ["Zeta"]},
+    )
+
+    # El orden es el del catalogo, no el de la fecha de cada foto.
+    assert [card.title for card in cards] == ["Zeta", "Alfa"]
+
+
+def test_a_catalogue_name_holding_no_photo_gets_no_card() -> None:
+    from fotos_plus.viewer import photo_cards
+
+    a = photo("a.jpg", "2024-01-01T10:00:00")
+
+    cards = photo_cards(
+        [a], photo_tags=["Favoritas", "Vacio"], photo_tagged={"a.jpg": ["Favoritas"]}
+    )
+
+    assert [card.title for card in cards] == ["Favoritas"]
+
+
+def test_a_photo_in_several_buckets_appears_in_each_card() -> None:
+    from fotos_plus.viewer import photo_cards
+
+    a = photo("a.jpg", "2024-01-01T10:00:00")
+
+    cards = photo_cards(
+        [a],
+        photo_tags=["Favoritas", "Para imprimir"],
+        photo_tagged={"a.jpg": ["Favoritas", "Para imprimir"]},
+    )
+
+    assert [card.title for card in cards] == ["Favoritas", "Para imprimir"]
+    assert all(card.photos == [a] for card in cards)
+
+
+def test_a_marked_photo_with_a_bucket_appears_in_both_cards() -> None:
+    from fotos_plus.viewer import photo_cards
+
+    a = photo("a.jpg", "2024-01-01T10:00:00")
+
+    cards = photo_cards(
+        [a],
+        marked=[a.sha256],
+        photo_tags=["Favoritas"],
+        photo_tagged={"a.jpg": ["Favoritas"]},
+    )
+
+    assert [card.title for card in cards] == ["Marcadas", "Favoritas"]
+    assert all(card.photos == [a] for card in cards)
+
+
+def test_no_photo_at_all_gets_no_photo_cards() -> None:
+    from fotos_plus.viewer import photo_cards
+
+    assert photo_cards([], marked=["a.jpg"], photo_tags=["Favoritas"]) == []
+
+
+def test_an_undated_photo_still_gets_a_card_and_follows_browse_order() -> None:
+    from fotos_plus.viewer import _photo_sort_key, photo_cards
+
+    con_fecha = photo("a.jpg", "2024-01-01T10:00:00")
+    sin_fecha = photo("b.jpg", None)
+
+    cards = photo_cards(
+        [sin_fecha, con_fecha],
+        photo_tags=["Favoritas"],
+        photo_tagged={"a.jpg": ["Favoritas"], "b.jpg": ["Favoritas"]},
+    )
+
+    # No se descarta por no tener fecha: aparece, y en el mismo orden que el recorrido.
+    assert cards[0].photos == [sin_fecha, con_fecha]
+    assert cards[0].photos == sorted([sin_fecha, con_fecha], key=_photo_sort_key)
+    assert cards[0].first_captured_at == "2024-01-01T10:00:00"
+    assert cards[0].last_captured_at == "2024-01-01T10:00:00"
+
+
+def test_card_count_and_dates_come_from_the_actual_photos() -> None:
+    from fotos_plus.viewer import photo_cards
+
+    a = photo("a.jpg", "2024-01-01T10:00:00")
+    b = photo("b.jpg", "2024-06-01T10:00:00")
+    sin_fecha = photo("c.jpg", None)
+
+    cards = photo_cards(
+        [a, b, sin_fecha],
+        photo_tags=["Favoritas"],
+        photo_tagged={
+            "a.jpg": ["Favoritas"],
+            "b.jpg": ["Favoritas"],
+            "c.jpg": ["Favoritas"],
+        },
+    )
+
+    assert cards[0].photo_count == 3
+    assert len(cards[0].photos) == 3
+    assert cards[0].first_captured_at == "2024-01-01T10:00:00"
+    assert cards[0].last_captured_at == "2024-06-01T10:00:00"
+
+
+def test_a_bucket_with_no_resolvable_photo_gets_no_card() -> None:
+    from fotos_plus.viewer import photo_cards
+
+    a = photo("a.jpg", "2024-01-01T10:00:00")
+
+    cards = photo_cards(
+        [a],
+        photo_tags=["Favoritas", "Para imprimir"],
+        photo_tagged={"a.jpg": ["Favoritas"], "zz.jpg": ["Para imprimir"]},
+    )
+
+    assert [card.title for card in cards] == ["Favoritas"]
+
+
+def test_a_bucket_name_with_spaces_gets_a_reserved_browse_key() -> None:
+    from fotos_plus.viewer import bucket_collection_key, photo_cards
+
+    a = photo("a.jpg", "2024-01-01T10:00:00")
+
+    cards = photo_cards(
+        [a],
+        photo_tags=["Para imprimir"],
+        photo_tagged={"a.jpg": ["Para imprimir"]},
+    )
+
+    assert cards[0].browse_key == bucket_collection_key("Para imprimir")
+    assert cards[0].browse_key == "cubo:Para imprimir"
+
+
+def test_a_photo_set_renders_as_a_card_not_a_flat_photo(tmp_path: Path) -> None:
     document = _sections_html(
         tmp_path, photo_tags=["Favoritas"], photo_tagged={"a.jpg": ["Favoritas"]}
     )
 
     assert '<section class="photo-section">' in document
-    # La foto de la seccion usa la tarjeta plana, con su fecha y sin encabezado de viaje.
-    assert 'class="card flat"' in document
-    assert "2024-01-01" in document
+    seccion = document.split('<section class="photo-section">', 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert '<article class="card photo-card">' in seccion
+    assert "card flat" not in seccion
+
+    card = _photo_card(document, "Favoritas")
+    assert '<p class="meta">1 foto' in card
+    assert "data-key" not in card
+    assert "data-tag" not in card
+    assert 'class="label-form"' not in card
+    assert 'class="tag-controls"' not in card
 
 
-def test_the_section_of_a_photo_reuses_the_flat_card_and_thumbnail(tmp_path: Path) -> None:
+def test_the_photo_card_reuses_embedded_thumbnails(tmp_path: Path) -> None:
     document = _sections_html(
         tmp_path, photo_tags=["Favoritas"], photo_tagged={"a.jpg": ["Favoritas"]}
     )
 
-    seccion = document.split('<section class="photo-section">', 1)[1].split("</section>")[0]
-    assert 'class="card flat"' in seccion
+    seccion = document.split('<section class="photo-section">', 1)[1].split(
+        "</section>", 1
+    )[0]
     assert "base64," in seccion
+    assert "/render" not in seccion
+    assert "/thumb" not in seccion
 
 
-def test_a_section_photo_never_references_the_render_endpoint(tmp_path: Path) -> None:
-    document = _sections_html(
-        tmp_path,
-        photo_tags=["Favoritas"],
-        photo_tagged={"a.jpg": ["Favoritas"]},
-        marked=["b.jpg"],
-    )
-
-    # Las secciones usan thumbnails embebidos: ningun render se pide ni se escribe.
-    for seccion in document.split('<section class="photo-section">')[1:]:
-        cuerpo = seccion.split("</section>")[0]
-        assert "/render" not in cuerpo
-        assert "base64," in cuerpo
-
-
-def test_each_section_reports_its_photo_count(tmp_path: Path) -> None:
+def test_a_photo_card_reports_its_count_and_date_range(tmp_path: Path) -> None:
     document = _sections_html(
         tmp_path,
         photo_tags=["Favoritas"],
         photo_tagged={"a.jpg": ["Favoritas"], "b.jpg": ["Favoritas"]},
     )
 
-    seccion = document.split('<section class="photo-section">', 1)[1].split("</section>")[0]
-    assert '<span class="tag-section-count">2 fotos</span>' in seccion
+    card = _photo_card(document, "Favoritas")
+    assert '<p class="meta">2 fotos · 2024-01-01 – 2024-06-01</p>' in card
 
 
-def test_a_section_of_one_photo_says_photo_and_not_photos(tmp_path: Path) -> None:
-    document = _sections_html(
-        tmp_path, photo_tags=["Favoritas"], photo_tagged={"a.jpg": ["Favoritas"]}
+def test_a_photo_card_with_no_known_date_omits_the_date_range(tmp_path: Path) -> None:
+    from fotos_plus.viewer import render_html
+
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+    groups = assign_groups(
+        [photo("a.jpg", None)],
+        suggestions(trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")]),
+    )
+    document = render_html(
+        groups,
+        str(root),
+        token="t0ken",
+        photo_tags=["Favoritas"],
+        photo_tagged={"a.jpg": ["Favoritas"]},
     )
 
-    assert '<span class="tag-section-count">1 foto</span>' in document
+    card = _photo_card(document, "Favoritas")
+    assert '<p class="meta">1 foto</p>' in card
 
 
-# --- 6.7 el orden de la pagina -------------------------------------------------
+def test_a_photo_card_shows_five_thumbnails(monkeypatch) -> None:
+    from fotos_plus import viewer
+
+    monkeypatch.setattr(viewer, "_thumbnail_b64", lambda photo, root: "mini")
+    fotos = [
+        photo(f"f{i}.jpg", f"2024-01-01T{i // 60:02d}:{i % 60:02d}:00")
+        for i in range(12)
+    ]
+    cards = viewer.photo_cards(
+        fotos,
+        photo_tags=["Favoritas"],
+        photo_tagged={foto.sha256: ["Favoritas"] for foto in fotos},
+    )
+
+    html = viewer._group_card(cards[0], Path("C:/fotos"), {}, token="t0ken")
+
+    assert html.count('class="thumb"') == 5
+    assert "12 fotos" in html
 
 
-def test_the_page_goes_groups_then_marked_then_buckets(
-    tmp_path: Path,
-) -> None:
+def test_a_small_photo_card_shows_all_its_thumbnails(monkeypatch) -> None:
+    from fotos_plus import viewer
+
+    monkeypatch.setattr(viewer, "_thumbnail_b64", lambda photo, root: "mini")
+    fotos = [photo("a.jpg", "2024-01-01T10:00:00"), photo("b.jpg", "2024-06-01T10:00:00")]
+    cards = viewer.photo_cards(
+        fotos,
+        photo_tags=["Favoritas"],
+        photo_tagged={foto.sha256: ["Favoritas"] for foto in fotos},
+    )
+
+    html = viewer._group_card(cards[0], Path("C:/fotos"), {}, token="t0ken")
+
+    assert html.count('class="thumb"') == 2
+
+
+def test_a_served_photo_card_offers_its_reserved_browse_key(tmp_path: Path) -> None:
+    document = _sections_html(
+        tmp_path,
+        marked=["a.jpg"],
+        photo_tags=["Favoritas"],
+        photo_tagged={"b.jpg": ["Favoritas"]},
+    )
+
+    marcadas = _photo_card(document, "Marcadas")
+    favoritas = _photo_card(document, "Favoritas")
+    assert 'data-browse-key="marcadas"' in marcadas
+    assert 'data-browse-key="cubo:Favoritas"' in favoritas
+    assert "Ver fotos" in marcadas
+    assert "Ver fotos" in favoritas
+
+
+def test_the_page_goes_groups_then_marked_then_buckets(tmp_path: Path) -> None:
     document = _sections_html(
         tmp_path,
         marked=["a.jpg"],
@@ -1869,11 +1962,11 @@ def test_the_page_goes_groups_then_marked_then_buckets(
     grid = document.index('<div class="grid">')
     fotos = document.index('<section class="photo-section">')
     assert grid < fotos
-    # Y entre las secciones de fotos: marcadas, despues cubos. Sin cubo no existe.
-    marcadas = document.index(">Marcadas<span")
-    favoritas = document.index(">Favoritas<span")
+    # Y entre las tarjetas de fotos: marcadas, despues cubos. Sin cubo no existe.
+    marcadas = document.index("<h2>Marcadas</h2>")
+    favoritas = document.index("<h2>Favoritas</h2>")
     assert marcadas < favoritas
-    assert "Sin cubo" not in document
+    assert "<h2>Sin cubo</h2>" not in document
 
 
 def test_a_library_with_nothing_to_regroup_keeps_the_single_flat_grid(
@@ -1892,7 +1985,7 @@ def test_a_library_with_nothing_to_regroup_keeps_the_single_flat_grid(
 
 
 def _group_cards(document: str) -> list[str]:
-    """Las tarjetas de grupo, sin las fotos sueltas de las secciones de cubos."""
+    """Las tarjetas de grupo, sin las tarjetas de fotos ni la grilla plana."""
     return re.findall(r'<article class="card"(?![^>]*\bflat\b).*?</article>', document, re.S)
 
 
@@ -1915,7 +2008,7 @@ def test_a_mark_leaves_the_group_card_alone(tmp_path: Path) -> None:
     assert _group_cards(con_marcas) == _group_cards(sin_marcas)
 
 
-def test_a_bucketed_photo_disappears_from_the_section_when_unbucketed(
+def test_a_bucketed_photo_disappears_from_the_card_when_unbucketed(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "fotos"
@@ -1935,55 +2028,61 @@ def test_a_bucketed_photo_disappears_from_the_section_when_unbucketed(
             photo_tagged=photo_tagged,
         )
 
-    def seccion_favoritas(document: str) -> str:
-        return document.split(">Favoritas<span", 1)[1].split("</section>")[0]
-
-    def photo_sections_html(document: str) -> list[str]:
-        return [
-            chunk.split("</section>")[0]
-            for chunk in document.split('<section class="photo-section">')[1:]
-        ]
-
     bucketed = documento({"a.jpg": ["Favoritas"]})
     unbucketed = documento({"b.jpg": ["Favoritas"]})
 
-    # a estaba en Favoritas y sale de esa seccion; ya no esta en ninguna seccion de fotos.
-    assert seccion_favoritas(bucketed).count('<article class="card flat"') == 1
-    assert seccion_favoritas(unbucketed).count('<article class="card flat"') == 1
-    assert seccion_favoritas(unbucketed).count('alt="b.jpg"') == 1
-    assert seccion_favoritas(unbucketed).count('alt="a.jpg"') == 0
-    assert all('alt="a.jpg"' not in chunk for chunk in photo_sections_html(unbucketed))
+    # a estaba en Favoritas y sale de esa tarjeta; b entra en su lugar.
+    favoritas_bucketed = _photo_card(bucketed, "Favoritas")
+    favoritas_unbucketed = _photo_card(unbucketed, "Favoritas")
+    assert 'alt="a.jpg"' in favoritas_bucketed
+    assert 'alt="b.jpg"' not in favoritas_bucketed
+    assert 'alt="b.jpg"' in favoritas_unbucketed
+    assert 'alt="a.jpg"' not in favoritas_unbucketed
     assert "Sin cubo" not in unbucketed
 
 
-# --- 6.9 las secciones de fotos no son destino de arrastre --------------------
+# --- 6.9 las tarjetas de fotos no son destino de arrastre ---------------------
 
 
-def test_a_photo_section_is_not_a_drop_target(tmp_path: Path) -> None:
+def test_a_photo_card_is_not_a_drop_target(tmp_path: Path) -> None:
     document = _sections_html(
         tmp_path, photo_tags=["Favoritas"], photo_tagged={"a.jpg": ["Favoritas"]}
     )
 
-    seccion = document.split('<section class="photo-section">', 1)[1].split("</section>")[0]
+    seccion = document.split('<section class="photo-section">', 1)[1].split(
+        "</section>", 1
+    )[0]
     # Sin `data-drop` no hay zona de destino: soltar ahi no tiene a quien leer un tag.
     assert "data-drop" not in seccion
+    assert "data-key" not in _photo_card(document, "Favoritas")
 
 
-def test_the_drop_script_ignores_photo_sections(tmp_path: Path) -> None:
+def test_the_drop_script_ignores_photo_cards(tmp_path: Path) -> None:
     document = _sections_html(
         tmp_path, photo_tags=["Favoritas"], photo_tagged={"a.jpg": ["Favoritas"]}
     )
 
-    # El arrastre se engancha a `.tag-section` para mover tags, y a `.photo-section` solo
-    # para rechazar el gesto: una seccion de fotos nunca recibe una tarjeta de grupo.
-    assert 'querySelectorAll(".tag-section")' in document
+    # El arrastre se engancha a las tarjetas de grupo (las que tienen `data-key`), y a
+    # `.photo-section` solo para rechazar el gesto.
+    assert 'querySelectorAll(".card[data-key]")' in document
+    assert 'querySelectorAll(".card")' not in document
     assert 'querySelectorAll(".photo-section")' in document
-    assert 'querySelectorAll("section")' not in document
     # El rechazo avisa el motivo y no guarda nada: no llama a `soltar` ni a `postTag`.
     rechazo = document.split('querySelectorAll(".photo-section")', 1)[1].split("});", 1)[0]
-    assert "dropEffect = \"none\"" in rechazo
+    assert 'dropEffect = "none"' in rechazo
     assert "postTag" not in rechazo
     assert "soltar(" not in rechazo
+
+
+def test_a_photo_card_is_not_draggable(tmp_path: Path) -> None:
+    document = _sections_html(
+        tmp_path, photo_tags=["Favoritas"], photo_tagged={"a.jpg": ["Favoritas"]}
+    )
+
+    card = _photo_card(document, "Favoritas")
+    assert "<article class=\"card photo-card\">" in card
+    assert "draggable" not in card
+    assert "data-key" not in card
 
 
 def test_a_group_section_is_still_a_drop_target(tmp_path: Path) -> None:
@@ -2008,13 +2107,15 @@ def test_a_group_section_is_still_a_drop_target(tmp_path: Path) -> None:
     assert document.count('<section class="tag-section" data-drop=') == 2
 
 
-def test_the_refusal_message_says_buckets_are_not_a_destination(tmp_path: Path) -> None:
+def test_the_refusal_message_says_photo_sets_are_not_a_destination(
+    tmp_path: Path,
+) -> None:
     document = _sections_html(
         tmp_path, photo_tags=["Favoritas"], photo_tagged={"a.jpg": ["Favoritas"]}
     )
 
     rechazo = document.split('querySelectorAll(".photo-section")', 1)[1]
-    assert "Los cubos nombran fotos, no viajes" in rechazo
+    assert "Las marcas y los cubos nombran fotos, no viajes" in rechazo
 
 
 # --- 7 el export estatico ------------------------------------------------------
@@ -2068,7 +2169,7 @@ def _export_with(tmp_path: Path, **edicion) -> str:
     return document
 
 
-def test_the_export_shows_the_marked_and_bucket_sections(tmp_path: Path) -> None:
+def test_the_export_shows_the_marked_and_bucket_cards(tmp_path: Path) -> None:
     document = _export_with(
         tmp_path,
         marked=[A_SHA],
@@ -2076,13 +2177,14 @@ def test_the_export_shows_the_marked_and_bucket_sections(tmp_path: Path) -> None
         photo_tagged={A_SHA: ["Favoritas"]},
     )
 
-    assert ">Marcadas<span" in document
-    assert ">Favoritas<span" in document
-    # La foto sin cubo no sale en ninguna seccion de fotos.
-    assert ">Sin cubo<span" not in document
+    assert "<h2>Marcadas</h2>" in document
+    assert "<h2>Favoritas</h2>" in document
+    assert 'class="card photo-card"' in document
+    # La foto sin cubo no sale en ninguna tarjeta de fotos.
+    assert "<h2>Sin cubo</h2>" not in document
 
 
-def test_the_export_shows_the_bucket_section_next_to_the_marked_one(
+def test_the_export_shows_the_bucket_card_next_to_the_marked_one(
     tmp_path: Path,
 ) -> None:
     document = _export_with(
@@ -2092,18 +2194,18 @@ def test_the_export_shows_the_bucket_section_next_to_the_marked_one(
         photo_tagged={A_SHA: ["Favoritas"]},
     )
 
-    assert document.index(">Marcadas<span") < document.index(">Favoritas<span")
-    assert ">Sin cubo<span" not in document
+    assert document.index("<h2>Marcadas</h2>") < document.index("<h2>Favoritas</h2>")
+    assert "<h2>Sin cubo</h2>" not in document
 
 
-def test_the_export_shows_no_untagged_section_when_no_buckets_at_all(
+def test_the_export_shows_no_untagged_card_when_no_buckets_at_all(
     tmp_path: Path,
 ) -> None:
     document = _export_with(tmp_path, marked=[A_SHA])
 
-    assert ">Marcadas<span" in document
-    # No untagged section when there are no buckets at all
-    assert ">Sin cubo<span" not in document
+    assert "<h2>Marcadas</h2>" in document
+    # No untagged card when there are no buckets at all
+    assert "<h2>Sin cubo</h2>" not in document
 
 
 def test_the_export_has_no_picker_and_no_bucket_controls(tmp_path: Path) -> None:
@@ -2118,15 +2220,27 @@ def test_the_export_has_no_picker_and_no_bucket_controls(tmp_path: Path) -> None
     assert 'class="bucket-add"' not in document
 
 
-def test_the_export_has_no_drop_target_on_its_photo_sections(tmp_path: Path) -> None:
+def test_the_export_has_no_drop_target_on_its_photo_cards(tmp_path: Path) -> None:
     document = _export_with(
         tmp_path, photo_tags=["Favoritas"], photo_tagged={A_SHA: ["Favoritas"]}
     )
 
-    seccion = document.split('<section class="photo-section">', 1)[1].split("</section>")[0]
+    seccion = document.split('<section class="photo-section">', 1)[1].split(
+        "</section>", 1
+    )[0]
     assert "data-drop" not in seccion
+    assert "data-key" not in _photo_card(document, "Favoritas")
     # Sin arrastre tampoco esta el script: el documento no ofrece ningun control.
     assert "<script>" not in document
+
+
+def test_the_export_photo_card_has_no_browse_control(tmp_path: Path) -> None:
+    document = _export_with(
+        tmp_path, marked=[A_SHA], photo_tags=["Favoritas"], photo_tagged={A_SHA: ["Favoritas"]}
+    )
+
+    assert 'class="browse-open"' not in document
+    assert "data-browse-key" not in document
 
 
 def test_the_export_payload_withholds_the_bucket_inventory(tmp_path: Path) -> None:
@@ -2157,13 +2271,13 @@ def test_a_bucket_whose_photo_is_gone_is_absent_but_its_name_survives(
     )
 
     # El nombre sigue en el archivo, asi que el selector lo ofrece, pero la foto no se
-    # muestra en ninguna seccion y su cubo queda vacio: sin seccion que le poner.
-    assert ">Para imprimir<span" not in document
-    seccion = document.split(">Favoritas<span", 1)[1].split("</section>")[0]
-    assert seccion.count('<article class="card flat"') == 1
-    assert 'alt="a.jpg"' in seccion
+    # muestra en ninguna tarjeta y su cubo queda vacio: sin tarjeta que le poner.
+    assert "<h2>Para imprimir</h2>" not in document
+    card = _photo_card(document, "Favoritas")
+    assert 'alt="a.jpg"' in card
+    assert card.count('class="thumb"') == 1
     # Y la de Favoritas sale con la foto que si existe.
-    assert ">Favoritas<span" in document
+    assert "<h2>Favoritas</h2>" in document
 
 
 def test_the_served_page_also_leaves_out_a_bucket_whose_photo_is_gone(
@@ -2175,11 +2289,11 @@ def test_the_served_page_also_leaves_out_a_bucket_whose_photo_is_gone(
         photo_tagged={"a.jpg": ["Favoritas"], "zz.jpg": ["Favoritas"]},
     )
 
-    # La foto que no existe no se muestra; la que si, sigue en su seccion, y la seccion
+    # La foto que no existe no se muestra; la que si, sigue en su tarjeta, y la tarjeta
     # cuenta solo esa.
-    seccion = document.split(">Favoritas<span", 1)[1].split("</section>")[0]
-    assert seccion.count('<article class="card flat"') == 1
-    assert 'class="tag-section-count">1 foto</span>' in seccion
+    card = _photo_card(document, "Favoritas")
+    assert card.count('class="thumb"') == 1
+    assert '<p class="meta">1 foto' in card
 
 
 def test_the_served_page_keeps_the_name_of_a_bucket_with_no_resolvable_photo(
@@ -2196,115 +2310,6 @@ def test_the_served_page_keeps_the_name_of_a_bucket_with_no_resolvable_photo(
     payload = json.loads(re.search(r'id="viewer-data">(.*?)</script>', document, re.S).group(1))
     assert payload["photo_tags"] == ["Para imprimir"]
 
-
-# --- el tope de fotos por seccion ----------------------------------------------
-
-
-
-# --- el tope de fotos por seccion ----------------------------------------------
-#
-# La miniatura se reemplaza por un texto fijo: lo que se prueba es cuantas se dibujan, y
-# generar de verdad cientos de miniaturas haria el test lentisimo sin agregar confianza.
-
-
-@pytest.fixture
-def miniaturas_baratas(monkeypatch):
-    from fotos_plus import viewer
-
-    monkeypatch.setattr(viewer, "_thumbnail_b64", lambda photo, root: "mini")
-
-
-def _seccion_de_fotos(n: int):
-    from fotos_plus.viewer import Section
-
-    return Section(
-        tag=None,
-        title="Favoritas",
-        photos=[
-            photo(f"f{i}.jpg", f"2024-01-01T{i // 60:02d}:{i % 60:02d}:00")
-            for i in range(n)
-        ],
-    )
-
-
-def test_a_section_under_the_cap_draws_every_photo(miniaturas_baratas) -> None:
-    from fotos_plus.viewer import PHOTOS_PER_SECTION, _section_html
-
-    total = PHOTOS_PER_SECTION - 1
-    html = _section_html(_seccion_de_fotos(total), Path("C:/fotos"), {})
-
-    assert html.count('<article class="card flat"') == total
-    assert f'<span class="tag-section-count">{total} fotos</span>' in html
-    assert "Se muestran" not in html
-
-
-def test_a_section_over_the_cap_draws_a_bounded_number_of_photos(
-    miniaturas_baratas,
-) -> None:
-    from fotos_plus.viewer import PHOTOS_PER_SECTION, _section_html
-
-    total = PHOTOS_PER_SECTION + 25
-    html = _section_html(_seccion_de_fotos(total), Path("C:/fotos"), {})
-
-    # El encabezado cuenta la verdad, aunque no se dibujen todas.
-    assert f'<span class="tag-section-count">{total} fotos</span>' in html
-    # Y el numero de miniaturas embebidas no pasa del tope: de esto vive la pagina.
-    assert html.count('<article class="card flat"') == PHOTOS_PER_SECTION
-
-
-def test_the_truncation_notice_says_how_many_were_left_out(miniaturas_baratas) -> None:
-    from fotos_plus.viewer import PHOTOS_PER_SECTION, _section_html
-
-    total = PHOTOS_PER_SECTION + 7
-    html = _section_html(_seccion_de_fotos(total), Path("C:/fotos"), {})
-
-    assert f"Se muestran {PHOTOS_PER_SECTION} de {total}" in html
-    assert "Las otras 7 fotos no se dibujan" in html
-    # El aviso menciona la salida: el recorrido, que ya existe, sigue mostrando todo.
-    assert "recorrido" in html
-
-
-def test_the_truncation_notice_is_singular_for_one_left_out(miniaturas_baratas) -> None:
-    from fotos_plus.viewer import PHOTOS_PER_SECTION, _section_html
-
-    html = _section_html(_seccion_de_fotos(PHOTOS_PER_SECTION + 1), Path("C:/fotos"), {})
-
-    assert "Las otras 1 foto no se dibujan" in html
-
-
-def test_the_truncated_section_keeps_its_first_photos(miniaturas_baratas) -> None:
-    """Lo que se dibuja es el principio de la lista, en orden de recorrido."""
-    from fotos_plus.viewer import PHOTOS_PER_SECTION, _section_html
-
-    html = _section_html(_seccion_de_fotos(PHOTOS_PER_SECTION + 25), Path("C:/fotos"), {})
-
-    assert 'alt="f0.jpg"' in html
-    assert f'alt="f{PHOTOS_PER_SECTION - 1}.jpg"' in html
-    assert f'alt="f{PHOTOS_PER_SECTION}.jpg"' not in html
-
-
-def test_a_truncated_section_still_carries_no_drop_target(miniaturas_baratas) -> None:
-    from fotos_plus.viewer import PHOTOS_PER_SECTION, _section_html
-
-    html = _section_html(_seccion_de_fotos(PHOTOS_PER_SECTION + 5), Path("C:/fotos"), {})
-
-    assert "data-drop" not in html
-
-
-def test_the_marked_section_is_capped_too(miniaturas_baratas) -> None:
-    from fotos_plus import viewer
-
-    total = viewer.PHOTOS_PER_SECTION + 3
-    secciones = viewer.photo_sections(
-        [photo(f"f{i}.jpg", f"2024-01-01T{i // 60:02d}:{i % 60:02d}:00") for i in range(total)],
-        marked=[f"f{i}.jpg" for i in range(total)],
-    )
-    marcadas = [s for s in secciones if s.title == viewer.MARKED_SECTION_TITLE][0]
-
-    html = viewer._section_html(marcadas, Path("C:/fotos"), {})
-
-    assert html.count('<article class="card flat"') == viewer.PHOTOS_PER_SECTION
-    assert f'<span class="tag-section-count">{total} fotos</span>' in html
 
 
 def test_the_photo_browser_can_scroll_to_the_bucket_controls() -> None:
@@ -2457,3 +2462,153 @@ def test_the_export_embeds_video_posters_and_no_blobs(tmp_path: Path, monkeypatc
 
     assert "video-thumb" in document
     assert "<video" not in document
+
+
+# --- 6. la carpeta de fotos y las miniaturas que no se pueden preparar ----------
+
+
+def test_resolve_library_root_prefers_the_index_folder(tmp_path: Path) -> None:
+    from fotos_plus.viewer import resolve_library_root
+
+    index_folder = tmp_path / "indice"
+    suggestions_folder = tmp_path / "sugerencias"
+    index_folder.mkdir()
+    suggestions_folder.mkdir()
+
+    assert (
+        resolve_library_root(str(index_folder), str(suggestions_folder)) == index_folder
+    )
+
+
+def test_resolve_library_root_falls_back_to_the_suggestions_folder(tmp_path: Path) -> None:
+    from fotos_plus.viewer import resolve_library_root
+
+    missing = tmp_path / "desconectada"
+    suggestions_folder = tmp_path / "sugerencias"
+    suggestions_folder.mkdir()
+
+    assert resolve_library_root(str(missing), str(suggestions_folder)) == suggestions_folder
+
+
+def test_resolve_library_root_reports_when_no_folder_exists(tmp_path: Path) -> None:
+    from fotos_plus.viewer import LibraryRootError, resolve_library_root
+
+    with pytest.raises(LibraryRootError):
+        resolve_library_root(str(tmp_path / "a"), str(tmp_path / "b"))
+
+
+def test_build_view_falls_back_to_the_suggestions_folder(tmp_path: Path) -> None:
+    from fotos_plus.index import suggestions_path_next_to, write_index, write_suggestions
+    from fotos_plus.models import ScanResult, SuggestionsResult
+    from fotos_plus.viewer import build_view
+
+    root = tmp_path / "fotos"
+    _write_photos(root, ["a.jpg"])
+    index_path = tmp_path / "indice.json"
+    write_index(
+        ScanResult(
+            root=str(tmp_path / "desconectada"),
+            scanned_at="2026-01-01T00:00:00",
+            photos=[photo("a.jpg", "2024-01-01T00:00:00")],
+        ),
+        index_path,
+    )
+    write_suggestions(
+        SuggestionsResult(
+            root=str(root),
+            scanned_at="2026-01-01T00:00:00",
+            trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")],
+        ),
+        suggestions_path_next_to(index_path),
+    )
+
+    document, flat = build_view(index_path)
+
+    assert flat is False
+    # La miniatura se pudo preparar con la carpeta que declaran las sugerencias.
+    assert 'class="thumb"' in document
+
+
+def test_build_view_reports_a_missing_library_folder(tmp_path: Path) -> None:
+    from fotos_plus.index import suggestions_path_next_to, write_index, write_suggestions
+    from fotos_plus.models import ScanResult, SuggestionsResult
+    from fotos_plus.viewer import LibraryRootError, build_view
+
+    index_path = tmp_path / "indice.json"
+    write_index(
+        ScanResult(root=str(tmp_path / "a"), scanned_at="2026-01-01T00:00:00", photos=[]),
+        index_path,
+    )
+    write_suggestions(
+        SuggestionsResult(root=str(tmp_path / "b"), scanned_at="2026-01-01T00:00:00"),
+        suggestions_path_next_to(index_path),
+    )
+
+    with pytest.raises(LibraryRootError):
+        build_view(index_path)
+
+
+def test_a_marked_card_without_previews_does_not_mention_another_group(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from fotos_plus import viewer
+
+    monkeypatch.setattr(viewer, "_thumbnail_b64", lambda foto, root: None)
+    groups = assign_groups(
+        [photo("a.jpg", "2024-01-01T10:00:00")],
+        suggestions(trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")]),
+    )
+
+    document = render_html(groups, str(tmp_path / "fotos"), token="t0ken", marked=["a.jpg"])
+
+    card = _photo_card(document, "Marcadas")
+    assert "1 foto" in card
+    assert "No se pudieron preparar las miniaturas." in card
+    assert "otro grupo" not in card
+
+
+def test_a_bucket_card_without_previews_keeps_its_count(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from fotos_plus import viewer
+
+    monkeypatch.setattr(viewer, "_thumbnail_b64", lambda foto, root: None)
+    groups = assign_groups(
+        [photo("a.jpg", "2024-01-01T10:00:00")],
+        suggestions(trips=[trip("2024-01-01T00:00:00", "2024-01-02T00:00:00")]),
+    )
+
+    document = render_html(
+        groups,
+        str(tmp_path / "fotos"),
+        token="t0ken",
+        photo_tags=["Favoritas"],
+        photo_tagged={"a.jpg": ["Favoritas"]},
+    )
+
+    card = _photo_card(document, "Favoritas")
+    assert "1 foto" in card
+    assert "No se pudieron preparar las miniaturas." in card
+    assert "otro grupo" not in card
+
+
+def test_a_group_card_without_previews_keeps_the_group_note(monkeypatch) -> None:
+    """La nota de grupo sigue siendo la de grupo; el cambio solo toca las de fotos."""
+    from fotos_plus import viewer
+    from fotos_plus.viewer import Group
+
+    monkeypatch.setattr(viewer, "_thumbnail_b64", lambda foto, root: None)
+    group = Group(
+        title="Periodo",
+        kind="period",
+        photo_count=0,
+        first_captured_at="2024-01-01T00:00:00",
+        last_captured_at="2024-01-02T00:00:00",
+        photos=[],
+        key="2024-01-01T00:00:00",
+    )
+
+    html = viewer._group_card(group, Path("C:/fotos"), {}, token="t0ken")
+
+    assert "Sin fotos propias: caen en otro grupo." in html
+    assert "No se pudieron preparar las miniaturas." not in html

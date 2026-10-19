@@ -1557,6 +1557,80 @@ def test_the_group_photos_are_the_ones_the_cards_show(tmp_path: Path, serving) -
     assert entry["photo_count"] == len(listing["photos"])
 
 
+def test_the_marked_card_is_served_as_a_photo_list(tmp_path: Path, serving) -> None:
+    from fotos_plus.labels import LabelOverlay, write_edicion
+
+    index_path = build_index(tmp_path, shas=("a" * 64, "b" * 64))
+    write_edicion(
+        LabelOverlay(marked=["a" * 64]), edicion_path_next_to(index_path)
+    )
+    url, token = serving(index_path)
+
+    status, data = fetch_photos(url, token, "marcadas")
+
+    assert status == 200
+    assert data["group"] == "marcadas"
+    assert data["title"] == "Marcadas"
+    assert [photo["ref"] for photo in data["photos"]] == ["a.jpg"]
+    assert data["photos"][0]["marked"] is True
+    assert data["marked_count"] == 1
+
+
+def test_a_bucket_card_is_served_as_a_photo_list(tmp_path: Path, serving) -> None:
+    from fotos_plus.labels import LabelOverlay, write_edicion
+
+    index_path = build_index(tmp_path, shas=("a" * 64, "b" * 64))
+    write_edicion(
+        LabelOverlay(
+            photo_tags=["Tucu"],
+            photo_tagged={"a" * 64: ["Tucu"], "b" * 64: ["Tucu"]},
+        ),
+        edicion_path_next_to(index_path),
+    )
+    url, token = serving(index_path)
+
+    status, data = fetch_photos(url, token, "cubo:Tucu")
+
+    assert status == 200
+    assert data["group"] == "cubo:Tucu"
+    assert data["title"] == "Tucu"
+    assert [photo["ref"] for photo in data["photos"]] == ["a.jpg", "b.jpg"]
+
+
+def test_a_bucket_card_with_spaces_resolves_from_the_query(tmp_path: Path, serving) -> None:
+    from fotos_plus.labels import LabelOverlay, write_edicion
+
+    index_path = build_index(tmp_path, shas=("a" * 64, "b" * 64))
+    write_edicion(
+        LabelOverlay(
+            photo_tags=["Para imprimir"],
+            photo_tagged={"a" * 64: ["Para imprimir"]},
+        ),
+        edicion_path_next_to(index_path),
+    )
+    url, token = serving(index_path)
+
+    status, data = fetch_photos(url, token, "cubo:Para imprimir")
+
+    assert status == 200
+    assert data["title"] == "Para imprimir"
+    assert [photo["ref"] for photo in data["photos"]] == ["a.jpg"]
+
+
+def test_an_empty_bucket_card_is_not_served(tmp_path: Path, serving) -> None:
+    from fotos_plus.labels import LabelOverlay, write_edicion
+
+    index_path = build_index(tmp_path, shas=("a" * 64, "b" * 64))
+    write_edicion(
+        LabelOverlay(photo_tags=["Vacio"]), edicion_path_next_to(index_path)
+    )
+    url, token = serving(index_path)
+
+    status, _ = fetch_photos(url, token, "cubo:Vacio")
+
+    assert status == 404
+
+
 def test_an_unknown_group_is_refused(tmp_path: Path, serving) -> None:
     index_path = build_index(tmp_path)
     url, token = serving(index_path)
@@ -1620,6 +1694,7 @@ def test_a_group_that_repeats_its_reference_is_refused(tmp_path: Path) -> None:
     server = _LabelServer.__new__(_LabelServer)
     server._group_map = None
     server._groups = [group, twin]
+    server._photo_cards = []
     server._resolution = object()
 
     assert server.group_for("misma") is None
@@ -2112,3 +2187,60 @@ def test_without_dev_mode_the_page_is_cached(tmp_path: Path, serving) -> None:
         segunda = r.read()
 
     assert primera == segunda
+
+
+# --- 6. la carpeta de fotos del servidor ------------------------------------------
+
+
+def test_the_server_falls_back_to_the_suggestions_folder(
+    tmp_path: Path, serving
+) -> None:
+    """Si la carpeta del indice no esta, sirve con la que declaran las sugerencias."""
+    index_path = build_index(tmp_path)
+    result = read_index(index_path)
+    write_index(
+        ScanResult(
+            root=str(tmp_path / "desconectada"),
+            scanned_at=result.scanned_at,
+            photos=result.photos,
+        ),
+        index_path,
+    )
+
+    url, token = serving(index_path)
+
+    status, data, headers = fetch_thumb(url, token, "a.jpg")
+
+    assert status == 200
+    assert headers["Content-Type"] == "image/jpeg"
+    assert data[:2] == b"\xff\xd8"
+
+
+def test_starting_the_server_without_a_library_folder_is_refused(tmp_path: Path) -> None:
+    from fotos_plus.index import read_suggestions
+    from fotos_plus.server import EditServerError, start_edit_server
+
+    index_path = build_index(tmp_path)
+    result = read_index(index_path)
+    write_index(
+        ScanResult(
+            root=str(tmp_path / "a"),
+            scanned_at=result.scanned_at,
+            photos=result.photos,
+        ),
+        index_path,
+    )
+    suggestions_path = suggestions_path_next_to(index_path)
+    suggestions = read_suggestions(suggestions_path)
+    write_suggestions(
+        SuggestionsResult(
+            root=str(tmp_path / "b"),
+            scanned_at=suggestions.scanned_at,
+            trips=suggestions.trips,
+            periods=suggestions.periods,
+        ),
+        suggestions_path,
+    )
+
+    with pytest.raises(EditServerError):
+        start_edit_server(index_path)
